@@ -49,6 +49,7 @@ class SGBMTruth:
     def __init__(
         self,
         num_disparities: int = 128,
+        min_disparity: int = 0,
         block_size: int = 7,
         mode: int = cv2.STEREO_SGBM_MODE_HH,
         uniqueness_ratio: int = 10,
@@ -62,8 +63,9 @@ class SGBMTruth:
         p2 = 32 * block_size ** 2
 
         self.num_disparities = num_disparities
+        self.min_disparity = min_disparity
         self._sgbm = cv2.StereoSGBM_create(
-            minDisparity=0,
+            minDisparity=min_disparity,
             numDisparities=num_disparities,
             blockSize=block_size,
             P1=p1,
@@ -79,7 +81,9 @@ class SGBMTruth:
         """返回 float32 视差图，单位像素。无效点为 0。"""
         raw = self._sgbm.compute(gray_left, gray_right)
         disp = raw.astype(np.float32) / 16.0
-        disp[disp < 0] = 0.0
+        # OpenCV SGBM: 有效值落在 [minDisparity, minDisparity+numDisparities)，
+        # 无效值置为 minDisparity-1。这里只清无效值，**保留绝对视差坐标**。
+        disp[disp <= (self.min_disparity - 1) + 1e-3] = 0.0
         return disp
 
     @staticmethod
