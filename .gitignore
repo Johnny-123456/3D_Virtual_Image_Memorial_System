@@ -1,0 +1,29 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- 运行产物（禁止入库）----
+output/
+/tmp/
+*.npy
+*.npz
+*.onnx
+*.rknn
+*.avi
+*.mp4
+
+# ---- 采集素材（用户数据，不入库）----
+assets/
+
+# ---- 临时可视化 ----
+test_*.jpg
+probe_*.jpg
+/scratch/
+
+# ---- 编辑器 ----
+.vscode/
+.idea/
+*.swp
