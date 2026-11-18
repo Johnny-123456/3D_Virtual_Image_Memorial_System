@@ -51,6 +51,8 @@ import numpy as np
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "config", "rectify.json")
+DEPTH_CALIB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "config", "depth_calib.json")
 
 # 标定文件里唯一还可信的量：焦距量级（决定 FOV，1/4" 传感器 1280 宽 ≈ 1198 px）
 FX_HINT = 1198.7
@@ -279,6 +281,21 @@ def estimate_rectification(gL: np.ndarray, gR: np.ndarray,
     return best
 
 
+_depth_calib_cache: Optional[dict] = None
+
+
+def load_depth_calib(path: str = DEPTH_CALIB_PATH) -> Optional[dict]:
+    """加载两点标定得到的深度尺度参数。缺失时返回 None。"""
+    global _depth_calib_cache
+    if _depth_calib_cache is not None:
+        return _depth_calib_cache
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        _depth_calib_cache = json.load(f)
+    return _depth_calib_cache
+
+
 def save_rectification(result: dict, path: str = CONFIG_PATH) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     result = dict(result)
@@ -320,15 +337,23 @@ class Rectifier:
         x, y, w, h = self.valid_roi
         return img[y:y + h, x:x + w]
 
-    def disparity_to_depth(self, disp: np.ndarray,
-                           baseline_mm: Optional[float] = None) -> np.ndarray:
-        """Z[m] = fx * B / d。baseline 未标定前只作相对量使用。"""
-        b = baseline_mm if baseline_mm is not None else self.meta.get("baseline_mm")
+    def disparity_to_depth(self, disp: np.ndarray) -> np.ndarray:
+        """绝对视差 → 米制深度。
+
+            Z = K / (d - d_inf),   K = fx * B
+
+        `d_inf` 是相机固有的无穷远视差偏移（本机约 -156 px），**不能省略**：
+        它来自两目主点不一致，数值上比物体视差还大，漏掉会让深度差出数倍。
+
+        参数来自 config/depth_calib.json（两点标定产物）。缺失时返回全 0。
+        """
+        c = load_depth_calib()
         out = np.zeros_like(disp, dtype=np.float32)
-        if not b:
+        if not c:
             return out
-        valid = disp > 0
-        out[valid] = (FX_HINT * b * 1e-3) / disp[valid]
+        denom = disp.astype(np.float32) - float(c["disparity_inf_px"])
+        ok = denom > 1e-3
+        out[ok] = float(c["k_px_m"]) / denom[ok]
         return out
 
     def summary(self) -> dict:

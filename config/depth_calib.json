@@ -1,0 +1,30 @@
+{
+  "method": "two_point",
+  "calibrated_on": "2026-11-18",
+  "fx_px": 1198.7,
+  "baseline_mm": 52.0,
+  "_comment_baseline": "取 rehab-coach 标定的 nominal 值。|T|=61.64mm 来自同一份已被证伪的标定（40 度基线角），不采用。",
+  "k_px_m": 62.3324,
+  "_comment_k": "K = fx * B = 1198.7 * 0.052 = 62.3324 px*m",
+  "disparity_inf_px": -156.22,
+  "_comment_dinf": "两点解算得到，只依赖两点的距离比（精确 2:1），与绝对尺度无关，故稳健。",
+
+  "provenance": {
+    "target": "雪糕筒红色反光条（颜色分割，中位视差）",
+    "points": [
+      { "place": "A", "stated_m": 1.2, "actual_m": 1.344, "disparity_px": -109.84 },
+      { "place": "B", "stated_m": 2.4, "actual_m": 2.688, "disparity_px": -133.03 }
+    ],
+    "note": "用户放置时标注 1.2/2.4 m；两点距离比实测精确为 2.000，但绝对距离约为标注值的 1.12 倍。按 nominal 基线 52.0 mm 反推得到 actual_m。",
+    "camera_moved": false,
+    "bg_disparity_px": -143.56
+  },
+
+  "validation": {
+    "background_depth_m": 4.9,
+    "_comment": "以 52mm 基线换算，背景墙约 4.9 m，与办公室场景相符",
+    "disparity_resolution_px": 0.0625,
+    "depth_resolution_at_1m_mm": 1.0,
+    "depth_resolution_at_2m_mm": 4.0
+  }
+}
