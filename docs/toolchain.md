@@ -51,6 +51,7 @@
 
 ```
 WSL2 (Ubuntu-22.04)  ~/rknn-toolkit-docker/
+  ↑ 注意：WSL 虚拟磁盘在 D 盘 D:\WSL\Ubuntu-22.04\ext4.vhdx（见 §8）
 ├── Dockerfile                                    版本锁都在这里
 ├── rknn_toolkit2-2.3.2-cp310-...whl              转换工具 wheel（38 MB）
 ├── convert.sh                                    转换入口
@@ -61,7 +62,7 @@ WSL2 (Ubuntu-22.04)  ~/rknn-toolkit-docker/
 Windows  C:\Users\29678\rknn_handoff\              产物中转（传给板子用）
 ```
 
-镜像：`rknn-toolkit2:2.3.2`，**9.94 GB**
+镜像：`rknn-toolkit2:2.3.2`，**2.42 GB**（精简版，见 §8）
 
 ---
 
@@ -133,6 +134,7 @@ toolkit version: 2.3.2, target: RKNPU v2, target platform: rk3588
 |---|---|
 | WSL 发行版 | Ubuntu-22.04（x86_64，20 核，15 GB） |
 | Docker | 29.8.2，**WSL 内原生 Docker Engine**（非 Docker Desktop） |
+| WSL 虚拟磁盘位置 | **`D:\WSL\Ubuntu-22.04\ext4.vhdx`**（5.89 GB） |
 | Docker 镜像源 | `docker.m.daocloud.io`、`dockerproxy.net` |
 | pip 源 | 清华 TUNA |
 | apt 源 | 阿里云 |
@@ -141,3 +143,73 @@ toolkit version: 2.3.2, target: RKNPU v2, target platform: rk3588
 > WSL 的 default gateway 可用 `ip route | awk '/^default/{print $3}'` 取，
 > 本机为 `172.20.80.1`。代理只在下载 GitHub wheel 时用了一次，
 > 其余 apt / pip / docker pull 都走国内镜像。
+
+---
+
+## 8. 磁盘占用与迁移（2026-11-19）
+
+### 8.1 发现的问题
+
+Docker 全部落在 WSL2 的虚拟磁盘里，而 WSL 默认把虚拟磁盘放在 **C 盘**：
+
+```
+C:\Users\<user>\AppData\Local\wsl\{GUID}\ext4.vhdx
+```
+
+首次搭建后实测占用：
+
+| 项目 | 占用 |
+|---|---|
+| Docker 镜像（含 torch + CUDA 运行库） | 9.94 GB |
+| Docker 构建缓存 | 19.92 GB |
+| **vhdx 合计** | **29.60 GB** |
+
+⚠️ **关键坑：清缓存不会释放 C 盘空间。** WSL 虚拟磁盘只增不减，
+`docker builder prune` 之后 vhdx 依然 29.6 GB，必须压缩或迁移才能真正归还。
+
+`wsl --manage <distro> --set-sparse true` 会因 vhdx 格式被拒（需 `--allow-unsafe`），
+故采用导出/导入的方式，同时完成**迁移**和**压缩**。
+
+### 8.2 镜像瘦身：9.94 GB → 2.42 GB
+
+| 措施 | 效果 |
+|---|---|
+| `pip install --no-deps` 装 rknn wheel，跳过它声明的 torch | 去掉 797 MB 的 torch 主包 |
+| 改从 `download.pytorch.org/whl/cpu` 装 **CPU 版 torch** | 去掉 2–3 GB 的 nvidia-* CUDA 运行库 |
+
+> 不能完全去掉 torch：`rknn/api/rknn_utils.py` 在 **import 阶段** 就 `import torch`，
+> 缺了会直接 `ModuleNotFoundError`。CPU 版（约 180 MB）是性价比最高的做法。
+
+实测：精简镜像对 **DepthAnything-V2-Small（823 节点）** 的转换结果与完整镜像完全一致
+（均产出 57.5 MB 的 .rknn），ONNX→RKNN 转换不依赖 torch 的 CUDA 能力。
+
+### 8.3 WSL 迁移到 D 盘
+
+```powershell
+wsl --shutdown
+wsl --export  Ubuntu-22.04 D:\WSL\ubuntu-22.04-backup.tar
+wsl --unregister Ubuntu-22.04
+wsl --import  Ubuntu-22.04 D:\WSL\Ubuntu-22.04 D:\WSL\ubuntu-22.04-backup.tar --version 2
+```
+
+结果：
+
+| | 迁移前 | 迁移后 |
+|---|---|---|
+| vhdx 位置 | `C:\Users\...\wsl\{GUID}\ext4.vhdx` | **`D:\WSL\Ubuntu-22.04\ext4.vhdx`** |
+| vhdx 大小 | 29.60 GB | **5.89 GB** |
+| C 盘可用 | 48.3 GB | **77.9 GB**（回收 29.6 GB） |
+| 导出 tar | — | 5.51 GB（保留在 D: 作回滚） |
+
+迁移后验证：`/etc/wsl.conf`（`systemd=true`、`default=johnny`）随文件系统保留，
+默认用户、systemd、Docker 守护进程、镜像与工具链文件全部正常。
+
+> 回滚方法：`wsl --unregister Ubuntu-22.04` 后从 `D:\WSL\ubuntu-22.04-backup.tar`
+> 重新 import 即可。
+
+### 8.4 日常注意事项
+
+- 重建镜像会重新产生构建缓存（最多再涨约 10 GB），用完及时
+  `docker builder prune -a -f`；由于 vhdx 只增不减，长期需再次导出/导入来压缩
+- 若不愿每次迁移，可考虑把 Docker 的 `data-root` 指到 D 盘挂载点，
+  但 WSL 访问 `/mnt/d` 走 9p 协议，I/O 明显更慢，**不推荐**
