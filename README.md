@@ -15,8 +15,8 @@
 | Step 0 | 相机 I/O（by-id 路径、MJPG 2560x720、拆半） | ✅ 31.0 fps |
 | Step 1 | 极线校正 + SGBM 深度真值 | ✅ 中位\|Δy\| 0.389 px，有效视差 65.2% |
 | Step 3a | 深度尺度标定（两点法） | ✅ 误差 +0.8%，1.2m 处分辨率 1.44 mm |
-| Step 2 | 单目深度模型上 NPU | ⬜ 待开始 |
-| Step 3b | 单目相对深度 → 米制（用双目做标尺） | ⬜ |
+| Step 2 | 单目深度模型上 NPU | ✅ DA-V2-Small fp16，763 ms/帧（离线用，精度合格） |
+| Step 3b | 单目相对深度 → 米制（用双目做标尺） | ⬜ 下一步 |
 | Step 4 | DIBR 网格位移渲染 | ⬜ |
 | Step 5 | 观众眼位追踪 | ⬜ |
 | Step 6–8 | 微动 / 美术 / 魂盒 | ⬜ |
@@ -52,6 +52,7 @@ python3 tools/depth_eval.py --visual /tmp/x # 另存可视化
 | 深度公式 | 不能用 `Z=fB/d`，必须 `Z = K/(d - d_inf)`，本机 d_inf ≈ **-156 px** |
 | 相机必须用 by-id 路径 | `/dev/video21` 的编号会随插拔漂移 |
 | 板端只有 rknn-toolkit-lite2 | 仅推理；ONNX→RKNN 转换需 x86 Linux（Win 上走 WSL2） |
+| 单目深度很慢 | DA-V2-Small fp16 实测 **763 ms/帧**，int8 更慢且更差；只在采集期离线跑 |
 
 ## 硬件
 
