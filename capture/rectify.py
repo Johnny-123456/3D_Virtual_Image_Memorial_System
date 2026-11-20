@@ -352,7 +352,9 @@ class Rectifier:
         if not c:
             return out
         denom = disp.astype(np.float32) - float(c["disparity_inf_px"])
-        ok = denom > 1e-3
+        # disp == 0 是"无效"哨兵，必须显式排除：
+        # 否则 0 - d_inf ≈ 156 会算出 0.4 m 的伪深度（0 也落在有效区间内时尤其危险）
+        ok = (denom > 1e-3) & (disp != 0)
         out[ok] = float(c["k_px_m"]) / denom[ok]
         return out
 

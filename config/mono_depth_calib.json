@@ -1,0 +1,18 @@
+{
+  "method": "stereo_to_mono_affine",
+  "calibrated_on": "2026-11-20",
+  "model": "depth_anything_v2_small.rknn",
+  "input_size": 518,
+  "a": 0.25855699,
+  "b": 0.10037521,
+  "formula": "Z = 1 / (a * rel + b)",
+  "n_pixels": 489420,
+  "inlier_ratio": 0.5026,
+  "holdout": {
+    "median_abs_err_mm": 435.3,
+    "p95_abs_err_mm": 5224.2,
+    "median_rel_err": 0.0938,
+    "p95_rel_err": 2.5344
+  },
+  "note": "rel 为 DA 原始输出（越大越近）；系数在双目标定有效像素上拟合"
+}

@@ -81,9 +81,15 @@ class SGBMTruth:
         """返回 float32 视差图，单位像素。无效点为 0。"""
         raw = self._sgbm.compute(gray_left, gray_right)
         disp = raw.astype(np.float32) / 16.0
-        # OpenCV SGBM: 有效值落在 [minDisparity, minDisparity+numDisparities)，
-        # 无效值置为 minDisparity-1。这里只清无效值，**保留绝对视差坐标**。
-        disp[disp <= (self.min_disparity - 1) + 1e-3] = 0.0
+
+        # 有效视差必须落在 [minDisparity, minDisparity + numDisparities)。
+        # 实测坑：当 minDisparity 为负时，SGBM 对未匹配像素**不总是**返回
+        # minDisparity-1，也会返回 0。若只按 -1 判断，这些 0 会被当成有效视差，
+        # 经 Z = K/(d - d_inf) 换算后得到约 0.40 m 的伪近点（d_inf≈-156）。
+        lo = float(self.min_disparity)
+        hi = lo + self.num_disparities
+        bad = (disp < lo) | (disp >= hi)
+        disp[bad] = 0.0
         return disp
 
     @staticmethod
