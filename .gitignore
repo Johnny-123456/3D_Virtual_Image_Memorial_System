@@ -27,3 +27,6 @@ probe_*.jpg
 .vscode/
 .idea/
 *.swp
+
+# Qt 构建产物
+ui/build/

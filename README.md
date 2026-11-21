@@ -17,7 +17,7 @@
 | Step 3a | 深度尺度标定（两点法） | ✅ 误差 +0.8%，1.2m 处分辨率 1.44 mm |
 | Step 2 | 单目深度模型上 NPU | ✅ DA-V2-Small fp16，763 ms/帧（离线用，精度合格） |
 | Step 3b | 单目相对深度 → 米制（用双目做标尺） | ⬜ 下一步 |
-| Step 4 | DIBR 网格位移渲染 | ⬜ |
+| Step 4 | DIBR 网格位移渲染 + Qt 界面 | ✅ 板端 57.9 fps |
 | Step 5 | 观众眼位追踪 | ⬜ |
 | Step 6–8 | 微动 / 美术 / 魂盒 | ⬜ |
 
@@ -30,6 +30,26 @@ config/      rectify.json（校正变换）、depth_calib.json（深度尺度）
 docs/        方案文档
 assets/      采集产物（用户数据，不入库）
 ```
+
+## 界面（Step 4）
+
+板端 Qt5 + OpenGL 查看器：网格位移 DIBR + 双层合成 + 呼吸微动 + HUD。
+
+```bash
+# 生成渲染资产（截一帧 + 单目稠密深度）
+python3 tools/make_asset.py --name demo
+
+# 构建
+cd ui && mkdir -p build && cd build && cmake .. && make -j4
+
+# 运行（自动处理 DISPLAY / XAUTHORITY）
+./ui/run.sh assets/demo
+
+# 离屏截图（回归测试用，不需要人看屏）
+./ui/build/memorial_viewer --asset assets/demo --snapshot out.png --eye 0.6,0 --focus 1.8 --gain 70
+```
+
+交互：鼠标=视点、空格=自动摆动、`H`=HUD、`F`=全屏、`+/-`=视差、`[/]`=焦点、`Q`=退出。
 
 ## 常用命令
 
