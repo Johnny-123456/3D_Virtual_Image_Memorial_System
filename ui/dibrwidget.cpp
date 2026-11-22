@@ -48,6 +48,7 @@ void main() {
 
 static const char *kFrag = R"(
 uniform sampler2D uTex;
+uniform sampler2D uTexBlur;
 uniform sampler2D uDepthTex;
 uniform float uSplit;
 uniform int uPass;
@@ -62,8 +63,12 @@ void main() {
     c *= 1.0 - dot(d, d) * 0.45;
 
     if (uPass == 0) {
-        // 背景层：不位移，铺满整屏，稍微压暗
-        gl_FragColor = vec4(c * 0.92, 1.0);
+        // 背景层：用模糊版铺底。既做出景深，又能把"主体移开后露出的原主体"
+        // 糊成柔和的团块，弱化 DIBR 固有的鬼影。
+        vec3 bg = texture2D(uTexBlur, vUV).rgb;
+        vec2 db = vUV - 0.5;
+        bg *= 1.0 - dot(db, db) * 0.45;
+        gl_FragColor = vec4(bg * 0.88, 1.0);
     } else {
         // 前景层：只画比分割面更近的部分，用真 alpha 与背景混合
         float z = texture2D(uDepthTex, vUV).r;
@@ -105,12 +110,20 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
     m_zFocus = float(meta.value("z_focus").toDouble(5.0));
     m_zMin = float(meta.value("z_min").toDouble(0.3));
     m_zMax = float(meta.value("z_max").toDouble(10.0));
-    m_split = qBound(m_zMin, m_zFocus * 0.6f, m_zMax);
+    // 分割面优先取资产里的 z_split：只有比它更近的才走全视差
+    m_split = qBound(m_zMin,
+                     float(meta.value("z_split").toDouble(m_zFocus * 1.6)),
+                     m_zMax);
     if (m_w <= 0 || m_h <= 0) return fail("meta.json 宽高无效");
 
     m_img = QImage(dir + "/rgb.png");
     if (m_img.isNull()) return fail("打不开 rgb.png");
     m_img = m_img.convertToFormat(QImage::Format_RGBA8888);
+    // 预生成虚化背景：缩小再放大即可得到柔和的低频版本
+    m_blur = m_img.scaled(qMax(8, m_img.width() / 10), qMax(8, m_img.height() / 10),
+                          Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                 .scaled(m_img.width(), m_img.height(),
+                         Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     if (m_img.width() != m_w || m_img.height() != m_h) {
         m_w = m_img.width();
         m_h = m_img.height();
@@ -127,8 +140,12 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
     m_ok = true;
     if (m_gl) {
         makeCurrent();
-        if (m_texColor) { glDeleteTextures(1, &m_texColor); glDeleteTextures(1, &m_texDepth); }
-        m_texColor = m_texDepth = 0;
+        if (m_texColor) {
+            glDeleteTextures(1, &m_texColor);
+            glDeleteTextures(1, &m_texDepth);
+            glDeleteTextures(1, &m_texBlur);
+        }
+        m_texColor = m_texDepth = m_texBlur = 0;
         initializeGL();
         doneCurrent();
     }
@@ -160,6 +177,15 @@ void DibrWidget::initializeGL()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_w, m_h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                  m_img.constBits());
+
+    glGenTextures(1, &m_texBlur);
+    glBindTexture(GL_TEXTURE_2D, m_texBlur);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_w, m_h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 m_blur.constBits());
 
     glGenTextures(1, &m_texDepth);
     glBindTexture(GL_TEXTURE_2D, m_texDepth);
@@ -258,6 +284,9 @@ void DibrWidget::paintGL()
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, m_texDepth);
     m_prog.setUniformValue("uDepthTex", 1);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, m_texBlur);
+    m_prog.setUniformValue("uTexBlur", 2);
 
     m_prog.setUniformValue("uZFoc", m_zFocus);
     m_prog.setUniformValue("uEyeX", m_eyeX);

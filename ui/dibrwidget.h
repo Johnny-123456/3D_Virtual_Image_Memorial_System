@@ -62,6 +62,7 @@ private:
     bool m_gl = false;
     int m_w = 0, m_h = 0;
     QImage m_img;
+    QImage m_blur;
     QVector<float> m_depth;
     float m_zFocus = 5.0f, m_zMin = 0.3f, m_zMax = 10.0f;
     float m_split = 2.0f;
@@ -74,7 +75,7 @@ private:
     QOpenGLBuffer m_vbo{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer m_ibo{QOpenGLBuffer::IndexBuffer};
     QOpenGLVertexArrayObject m_vao;
-    GLuint m_texColor = 0, m_texDepth = 0;
+    GLuint m_texColor = 0, m_texDepth = 0, m_texBlur = 0;
     int m_cols = 220, m_rows = 124;
     int m_indexCount = 0;
 
