@@ -38,6 +38,12 @@ assets/      采集产物（用户数据，不入库）
 板端 Qt5 + OpenGL 查看器：网格位移 DIBR + 双层合成 + 呼吸微动 + HUD。
 
 ```bash
+# 【推荐】采集向导：实时质检 + 引导站位 + 一键出资产
+python3 tools/capture_wizard.py --asset portrait
+
+# 或分步做：单目尺度标定 + 出资产
+python3 tools/mono_calib.py --frames 4 --write --save-asset portrait
+
 # 生成渲染资产（截一帧 + 单目稠密深度 + matte + 背景板）
 python3 tools/make_asset.py --name demo
 
