@@ -220,7 +220,7 @@ int main(int argc, char **argv)
     QCommandLineOption optFocus("focus", "覆盖焦点深度(米)", "m");
     QCommandLineOption optGain("gain", "覆盖视差强度", "px");
     QCommandLineOption optPort("port", "眼位 UDP 端口", "p", "9999");
-    QCommandLineOption optStyle("style", "风格 0清晰/1回忆/2魂影", "i", "0");
+    QCommandLineOption optStyle("look", "风格 0清晰/1回忆/2魂影", "i", "0");
     QCommandLineOption optBlink("blink", "快照时固定眨眼量 0..1", "v");
     p.addOptions({optAsset, optSnap, optEye, optFull, optFocus, optGain,
                   optPort, optStyle, optBlink});
