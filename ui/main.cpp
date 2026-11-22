@@ -126,6 +126,7 @@ protected:
         case Qt::Key_Space: m_auto = !m_auto; break;
         case Qt::Key_H: m_showHud = !m_showHud; m_hud->setVisible(m_showHud); break;
         case Qt::Key_F: toggleFullscreen(); break;
+        case Qt::Key_S: m_gl->setStyle((m_gl->style() + 1) % 3); break;
         case Qt::Key_Plus:
         case Qt::Key_Equal: m_gl->setGain(m_gl->gain() + 5.0f); break;
         case Qt::Key_Minus: m_gl->setGain(m_gl->gain() - 5.0f); break;
@@ -142,10 +143,10 @@ private:
     void updateHud()
     {
         m_hud->setText(QString::fromUtf8(
-            "2.5D 怀念影像  |  %1 fps\n"
+            "2.5D 怀念影像  |  %1 fps   风格 %8\n"
             "视差 %2   焦点 %3 m   分割 %4 m\n"
             "眼点 (%5, %6)   %7\n"
-            "鼠标=视点  空格=自动  H=HUD  F=全屏  +/-=视差  [/]=焦点  Q=退出")
+            "鼠标=视点  空格=自动  S=风格  H=HUD  F=全屏  +/-=视差  [/]=焦点  Q=退出")
             .arg(double(m_gl->fps()), 0, 'f', 1)
             .arg(double(m_gl->gain()), 0, 'f', 0)
             .arg(double(m_gl->focus()), 0, 'f', 2)
@@ -154,7 +155,10 @@ private:
             .arg(double(m_eyeY), 0, 'f', 2)
             .arg(m_tracking ? QString::fromUtf8("眼动追踪")
                             : (m_auto ? QString::fromUtf8("自动摆动")
-                                      : QString::fromUtf8("鼠标"))));
+                                      : QString::fromUtf8("鼠标")))
+            .arg(m_gl->style() == 0 ? QString::fromUtf8("清晰")
+                                    : (m_gl->style() == 1 ? QString::fromUtf8("回忆")
+                                                          : QString::fromUtf8("魂影"))));
         m_hud->adjustSize();
     }
 
@@ -182,7 +186,9 @@ int main(int argc, char **argv)
     QCommandLineOption optFocus("focus", "覆盖焦点深度(米)", "m");
     QCommandLineOption optGain("gain", "覆盖视差强度", "px");
     QCommandLineOption optPort("port", "眼位 UDP 端口", "p", "9999");
-    p.addOptions({optAsset, optSnap, optEye, optFull, optFocus, optGain, optPort});
+    QCommandLineOption optStyle("style", "风格 0清晰/1回忆/2魂影", "i", "0");
+    p.addOptions({optAsset, optSnap, optEye, optFull, optFocus, optGain,
+                  optPort, optStyle});
     p.process(app);
 
     Viewer v(p.value(optAsset), quint16(p.value(optPort).toUShort()));
@@ -192,6 +198,7 @@ int main(int argc, char **argv)
         const float ex = xy.size() > 0 ? xy[0].toFloat() : 0.0f;
         const float ey = xy.size() > 1 ? xy[1].toFloat() : 0.0f;
         v.setAuto(false);
+        v.gl()->setStyle(p.value(optStyle).toInt());
         if (p.isSet(optFocus)) v.gl()->setFocusDepth(p.value(optFocus).toFloat());
         if (p.isSet(optGain)) v.gl()->setGain(p.value(optGain).toFloat());
         v.gl()->setEye(ex, ey);
@@ -207,6 +214,7 @@ int main(int argc, char **argv)
         return app.exec();
     }
 
+    v.gl()->setStyle(p.value(optStyle).toInt());
     v.resize(1280, 800);
     if (p.isSet(optFull)) v.showFullScreen();
     else v.show();

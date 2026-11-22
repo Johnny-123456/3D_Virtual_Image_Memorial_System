@@ -20,7 +20,8 @@
 | Step 4 | DIBR 网格位移渲染 + Qt 界面 | ✅ 板端 57.9 fps |
 | Step 5 | 观众眼位追踪 | ✅ YOLOv8-pose 12fps + UDP 驱动视点 |
 | Step 6 | 人像 matte（MODNet）| ✅ 286ms/帧，离线一次性 |
-| Step 7–8 | 微动 / 美术 / 魂盒 | ⬜ |
+| Step 7 | 美术风格化（清晰/回忆/魂影）| ✅ `S` 键切换 |
+| Step 8 | 魂盒（45° 半透镜）| ⬜ 需硬件 |
 
 ## 目录结构
 
@@ -54,7 +55,10 @@ cd ui && mkdir -p build && cd build && cmake .. && make -j4
 ./ui/build/memorial_viewer --asset assets/demo --snapshot out.png --eye 0.6,0 --focus 1.8 --gain 70
 ```
 
-交互：鼠标=视点、空格=自动摆动、`H`=HUD、`F`=全屏、`+/-`=视差、`[/]`=焦点、`Q`=退出。
+交互：鼠标=视点、空格=自动摆动、**`S`=风格（清晰/回忆/魂影）**、`H`=HUD、
+`F`=全屏、`+/-`=视差、`[/]`=焦点、`Q`=退出。
+
+风格也可用命令行指定：`--style 0|1|2`。
 
 ### 眼动追踪（Step 5）
 

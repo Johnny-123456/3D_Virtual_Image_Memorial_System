@@ -51,29 +51,38 @@ uniform sampler2D uTex;
 uniform sampler2D uTexBlur;
 uniform sampler2D uDepthTex;
 uniform sampler2D uMatte;
+uniform sampler2D uGlow;
 uniform int uHasMatte;
 uniform float uSplit;
+uniform float uGhostAlpha;
+uniform float uGlowAmt;
+uniform float uGrade;
 uniform int uPass;
 
 varying vec2 vUV;
 
-void main() {
-    vec3 c = texture2D(uTex, vUV).rgb;
+// 回忆调色：轻微降饱和 + 偏暖 + 提黑位（褪色胶片感）
+vec3 grade(vec3 c) {
+    float l = dot(c, vec3(0.299, 0.587, 0.114));
+    c = mix(vec3(l), c, 1.0 - 0.18 * uGrade);
+    c *= mix(vec3(1.0), vec3(1.07, 1.00, 0.93), uGrade);
+    c = mix(c, c * 0.93 + 0.035, uGrade);
+    return c;
+}
 
-    // 轻微暗角，像回忆里的老画面
+void main() {
     vec2 d = vUV - 0.5;
-    c *= 1.0 - dot(d, d) * 0.45;
+    float vig = 1.0 - dot(d, d) * (0.45 + 0.25 * uGrade);
 
     if (uPass == 0) {
-        // 背景层：用模糊版铺底。既做出景深，又能把"主体移开后露出的原主体"
-        // 糊成柔和的团块，弱化 DIBR 固有的鬼影。
         vec3 bg = texture2D(uTexBlur, vUV).rgb;
-        vec2 db = vUV - 0.5;
-        bg *= 1.0 - dot(db, db) * 0.45;
-        gl_FragColor = vec4(bg * 0.88, 1.0);
-    } else {
-        // 前景层：优先用 MODNet 的人像 alpha（发丝级），
-        // 没有 matte 时退回深度阈值（粗糙但能用）。
+        bg = grade(bg) * vig * 0.9;
+        gl_FragColor = vec4(bg, 1.0);
+
+    } else if (uPass == 1) {
+        vec3 c = texture2D(uTex, vUV).rgb;
+        c = grade(c) * vig;
+
         float alpha;
         if (uHasMatte == 1) {
             alpha = texture2D(uMatte, vUV).r;
@@ -82,8 +91,18 @@ void main() {
             float t = clamp((z - uSplit * 0.80) / max(uSplit * 0.40, 1e-3), 0.0, 1.0);
             alpha = 1.0 - t;
         }
+        alpha *= uGhostAlpha;
         if (alpha <= 0.002) discard;
         gl_FragColor = vec4(c, alpha);
+
+    } else {
+        // pass 2：边缘辉光，叠加混合（glBlendFunc(GL_ONE, GL_ONE)）
+        float m = texture2D(uMatte, vUV).r;
+        float g = texture2D(uGlow, vUV).r;
+        float rim = clamp(g - m, 0.0, 1.0);
+        rim = pow(rim, 0.6) * uGlowAmt * 2.2;   // 提亮，让辉光真的可见
+        vec3 warm = vec3(1.0, 0.87, 0.70);
+        gl_FragColor = vec4(warm * rim, 1.0);
     }
 }
 )";
@@ -93,6 +112,20 @@ DibrWidget::DibrWidget(QWidget *parent) : QOpenGLWidget(parent)
     m_clock.start();
     m_fpsTimer.start();
     setMouseTracking(true);
+}
+
+void DibrWidget::setStyle(int idx)
+{
+    m_style = qBound(0, idx, 2);
+    switch (m_style) {
+    case 0:  // 清晰
+        m_ghostAlpha = 1.00f; m_glowAmt = 0.30f; m_grade = 0.25f; break;
+    case 1:  // 回忆
+        m_ghostAlpha = 1.00f; m_glowAmt = 0.55f; m_grade = 0.75f; break;
+    default: // 魂影
+        m_ghostAlpha = 0.78f; m_glowAmt = 0.95f; m_grade = 1.00f; break;
+    }
+    update();
 }
 
 void DibrWidget::setEye(float ex, float ey)
@@ -160,6 +193,13 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
         m_hasMatte = true;
     } else {
         m_hasMatte = false;
+    }
+
+    if (m_hasMatte) {
+        // 辉光贴图 = 模糊后的 matte；着色器里用 (glow - matte) 得到边缘带
+        m_glow = m_matte.scaled(qMax(8, m_w / 12), qMax(8, m_h / 12),
+                                Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                        .scaled(m_w, m_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
 
     QFile df(dir + "/depth.f32");
@@ -230,6 +270,19 @@ void DibrWidget::initializeGL()
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, m_w, m_h, 0, GL_RED,
                      GL_UNSIGNED_BYTE, m_matte.constBits());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    }
+
+    if (m_hasMatte && !m_glow.isNull()) {
+        glGenTextures(1, &m_texGlow);
+        glBindTexture(GL_TEXTURE_2D, m_texGlow);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, m_w, m_h, 0, GL_RED,
+                     GL_UNSIGNED_BYTE, m_glow.constBits());
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     }
 
@@ -338,7 +391,15 @@ void DibrWidget::paintGL()
         glBindTexture(GL_TEXTURE_2D, m_texMatte);
         m_prog.setUniformValue("uMatte", 3);
     }
+    if (m_hasMatte && m_texGlow) {
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, m_texGlow);
+        m_prog.setUniformValue("uGlow", 4);
+    }
     m_prog.setUniformValue("uHasMatte", m_hasMatte ? 1 : 0);
+    m_prog.setUniformValue("uGhostAlpha", m_ghostAlpha);
+    m_prog.setUniformValue("uGlowAmt", m_glowAmt);
+    m_prog.setUniformValue("uGrade", m_grade);
 
     m_prog.setUniformValue("uZFoc", m_zFocus);
     m_prog.setUniformValue("uEyeX", m_eyeX);
@@ -354,10 +415,17 @@ void DibrWidget::paintGL()
     // 背景层：增益 0（不位移），保证铺满整屏不露黑边
     drawPass(0.0f, 0);
 
-    // 前景层：全增益视差，按深度淡入，与背景真正混合
+    // 前景层：全增益视差 + matte alpha
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     drawPass(1.0f, 1);
+
+    // 边缘辉光：叠加混合
+    if (m_hasMatte && m_texGlow && m_glowAmt > 0.01f) {
+        glBlendFunc(GL_ONE, GL_ONE);
+        drawPass(0.0f, 2);
+    }
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_BLEND);
 
     m_prog.release();

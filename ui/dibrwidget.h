@@ -36,6 +36,9 @@ public:
     void setFocusDepth(float z) { m_zFocus = qBound(0.2f, z, 30.0f); }
     void setSplit(float z) { m_split = qBound(0.2f, z, 30.0f); }
 
+    void setStyle(int idx);          ///< 0 清晰 / 1 回忆 / 2 魂影
+    int style() const { return m_style; }
+
     float gain() const { return m_gain; }
     float focus() const { return m_zFocus; }
     float split() const { return m_split; }
@@ -65,11 +68,16 @@ private:
     QImage m_blur;
     QImage m_bg;
     QImage m_matte;
+    QImage m_glow;
     QVector<float> m_depth;
     float m_zFocus = 5.0f, m_zMin = 0.3f, m_zMax = 10.0f;
     float m_split = 2.0f;
     float m_eyeX = 0.0f, m_eyeY = 0.0f;
     float m_gain = 40.0f;
+    float m_ghostAlpha = 1.0f;   // 主体不透明度（魂影模式调低）
+    float m_glowAmt = 0.35f;     // 边缘辉光强度
+    float m_grade = 0.5f;        // 调色强度 0..1
+    int m_style = 0;             // 0清晰 1回忆 2魂影
     float m_fps = 0.0f;
     float m_fitX = 1.0f, m_fitY = 1.0f;
 
@@ -77,7 +85,8 @@ private:
     QOpenGLBuffer m_vbo{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer m_ibo{QOpenGLBuffer::IndexBuffer};
     QOpenGLVertexArrayObject m_vao;
-    GLuint m_texColor = 0, m_texDepth = 0, m_texBlur = 0, m_texMatte = 0;
+    GLuint m_texColor = 0, m_texDepth = 0, m_texBlur = 0,
+           m_texMatte = 0, m_texGlow = 0;
     bool m_hasMatte = false;
     int m_cols = 220, m_rows = 124;
     int m_indexCount = 0;
