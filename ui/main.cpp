@@ -66,6 +66,9 @@ public:
                 m_gl->setEye(0.72f * std::sin(t * 0.85f),
                              0.28f * std::sin(t * 0.52f));
             }
+            // 无条件重绘：呼吸/微动是逐帧动画，不能只依赖眼动数据到达才重绘。
+            // 否则追踪只有 12fps 时，整个画面也跟着掉到 12fps。
+            m_gl->update();
         });
         m_timer->start();
         m_clock.start();
