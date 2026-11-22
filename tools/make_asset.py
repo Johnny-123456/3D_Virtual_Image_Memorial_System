@@ -96,6 +96,26 @@ def main() -> int:
     except Exception as e:
         print("  matte 生成失败（不影响主流程）:", e)
 
+    # 眨眼贴图
+    try:
+        import sys as _sys
+        _sys.path.insert(0, os.path.expanduser("~/rehab-coach/src/backend/vision"))
+        from pose_rknn import RknnPoseBackend
+        from capture.blink import make_blink
+        pb = RknnPoseBackend(os.path.expanduser(
+            "~/rehab-coach/models/yolov8n-pose.rknn"), imgsz=640, conf_threshold=0.4)
+        det = pb.detect(rgb)
+        pb.release()
+        kp = det["keypoints_2d"] if det else {}
+        if "left_eye" in kp and "right_eye" in kp:
+            le, re_ = kp["left_eye"], kp["right_eye"]
+            inter = float(np.hypot(le["x"] - re_["x"], le["y"] - re_["y"]))
+            cv2.imwrite(os.path.join(out_dir, "blink.png"),
+                        make_blink(rgb, [(le["x"], le["y"]), (re_["x"], re_["y"])], inter))
+            print("  blink.png 已生成")
+    except Exception as e:
+        print("  眨眼贴图生成失败（不影响主流程）:", e)
+
     # 顺手生成背景板（去掉主体），供 DIBR 背景层使用，避免鬼影
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

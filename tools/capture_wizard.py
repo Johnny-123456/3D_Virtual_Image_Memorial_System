@@ -313,6 +313,25 @@ def main() -> int:
     depth = 1.0 / np.clip(A * best["rel_full"] + B, 1e-4, None)
     write_background(out_dir, best["rgb"], depth.astype(np.float32),
                      meta["z_split"], matte)
+    # 眨眼贴图：用姿态模型定位双眼后合成
+    try:
+        from capture.blink import make_blink
+        pb = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
+        det2 = pb.detect(best["rgb"])
+        pb.release()
+        kp2 = det2["keypoints_2d"] if det2 else {}
+        if "left_eye" in kp2 and "right_eye" in kp2:
+            le, re_ = kp2["left_eye"], kp2["right_eye"]
+            inter = float(np.hypot(le["x"] - re_["x"], le["y"] - re_["y"]))
+            bl = make_blink(best["rgb"], [(le["x"], le["y"]), (re_["x"], re_["y"])],
+                            inter)
+            cv2.imwrite(os.path.join(out_dir, "blink.png"), bl)
+            print(f"  眨眼贴图已生成（瞳距 {inter:.0f}px）")
+        else:
+            print("  未检测到双眼，跳过眨眼贴图")
+    except Exception as e:
+        print("  眨眼贴图生成失败（不影响主流程）:", e)
+
     mono.close()
     matte_net.close()
 

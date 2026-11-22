@@ -37,6 +37,8 @@ public:
     void setSplit(float z) { m_split = qBound(0.2f, z, 30.0f); }
 
     void setStyle(int idx);          ///< 0 清晰 / 1 回忆 / 2 魂影
+    void setBlink(float v);          ///< 0 睁眼 .. 1 闭眼
+    bool hasBlink() const { return m_hasBlink; }
     int style() const { return m_style; }
 
     float gain() const { return m_gain; }
@@ -69,6 +71,7 @@ private:
     QImage m_bg;
     QImage m_matte;
     QImage m_glow;
+    QImage m_blinkImg;
     QVector<float> m_depth;
     float m_zFocus = 5.0f, m_zMin = 0.3f, m_zMax = 10.0f;
     float m_split = 2.0f;
@@ -86,7 +89,9 @@ private:
     QOpenGLBuffer m_ibo{QOpenGLBuffer::IndexBuffer};
     QOpenGLVertexArrayObject m_vao;
     GLuint m_texColor = 0, m_texDepth = 0, m_texBlur = 0,
-           m_texMatte = 0, m_texGlow = 0;
+           m_texMatte = 0, m_texGlow = 0, m_texBlink = 0;
+    bool m_hasBlink = false;
+    float m_blink = 0.0f;
     bool m_hasMatte = false;
     int m_cols = 220, m_rows = 124;
     int m_indexCount = 0;

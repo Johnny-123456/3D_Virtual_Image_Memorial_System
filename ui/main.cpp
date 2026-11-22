@@ -66,6 +66,31 @@ public:
                 m_gl->setEye(0.72f * std::sin(t * 0.85f),
                              0.28f * std::sin(t * 0.52f));
             }
+            // 眨眼：随机间隔 2.5~6 s，单次 160 ms（闭 64ms / 停 32ms / 睁 64ms）
+            if (m_gl->hasBlink()) {
+                const float t = m_clock.elapsed() / 1000.0f;
+                if (!m_blinking && t >= m_nextBlink) {
+                    m_blinking = true;
+                    m_blinkStart = t;
+                    m_nextBlink = t + 2.5f + 3.5f * m_rnd();
+                }
+                if (m_blinking) {
+                    const float dt = t - m_blinkStart;
+                    const float D = 0.16f;
+                    if (dt >= D) {
+                        m_blinking = false;
+                        m_gl->setBlink(0.0f);
+                    } else {
+                        const float p = dt / D;
+                        float v;
+                        if (p < 0.4f) v = p / 0.4f;
+                        else if (p < 0.6f) v = 1.0f;
+                        else v = 1.0f - (p - 0.6f) / 0.4f;
+                        m_gl->setBlink(v);
+                    }
+                }
+            }
+
             // 无条件重绘：呼吸/微动是逐帧动画，不能只依赖眼动数据到达才重绘。
             // 否则追踪只有 12fps 时，整个画面也跟着掉到 12fps。
             m_gl->update();
@@ -170,6 +195,15 @@ private:
     bool m_showHud = true;
     float m_eyeX = 0.0f;
     float m_eyeY = 0.0f;
+    bool m_blinking = false;
+    float m_blinkStart = 0.0f;
+    float m_nextBlink = 2.0f;
+    float m_rnd() {
+        // 轻量线性同余，够用
+        m_seed = m_seed * 1103515245u + 12345u;
+        return float((m_seed >> 16) & 0x7FFF) / 32767.0f;
+    }
+    unsigned int m_seed = 20261122u;
     EyeLink *m_link = nullptr;
     bool m_tracking = false;
 };
@@ -187,8 +221,9 @@ int main(int argc, char **argv)
     QCommandLineOption optGain("gain", "覆盖视差强度", "px");
     QCommandLineOption optPort("port", "眼位 UDP 端口", "p", "9999");
     QCommandLineOption optStyle("style", "风格 0清晰/1回忆/2魂影", "i", "0");
+    QCommandLineOption optBlink("blink", "快照时固定眨眼量 0..1", "v");
     p.addOptions({optAsset, optSnap, optEye, optFull, optFocus, optGain,
-                  optPort, optStyle});
+                  optPort, optStyle, optBlink});
     p.process(app);
 
     Viewer v(p.value(optAsset), quint16(p.value(optPort).toUShort()));
@@ -199,6 +234,7 @@ int main(int argc, char **argv)
         const float ey = xy.size() > 1 ? xy[1].toFloat() : 0.0f;
         v.setAuto(false);
         v.gl()->setStyle(p.value(optStyle).toInt());
+        if (p.isSet(optBlink)) v.gl()->setBlink(p.value(optBlink).toFloat());
         if (p.isSet(optFocus)) v.gl()->setFocusDepth(p.value(optFocus).toFloat());
         if (p.isSet(optGain)) v.gl()->setGain(p.value(optGain).toFloat());
         v.gl()->setEye(ex, ey);

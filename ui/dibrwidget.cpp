@@ -52,6 +52,9 @@ uniform sampler2D uTexBlur;
 uniform sampler2D uDepthTex;
 uniform sampler2D uMatte;
 uniform sampler2D uGlow;
+uniform sampler2D uTexBlink;
+uniform int uHasBlink;
+uniform float uBlink;
 uniform int uHasMatte;
 uniform float uSplit;
 uniform float uGhostAlpha;
@@ -81,6 +84,10 @@ void main() {
 
     } else if (uPass == 1) {
         vec3 c = texture2D(uTex, vUV).rgb;
+        if (uHasBlink == 1 && uBlink > 0.001) {
+            vec3 c2 = texture2D(uTexBlink, vUV).rgb;
+            c = mix(c, c2, uBlink);
+        }
         c = grade(c) * vig;
 
         float alpha;
@@ -125,6 +132,12 @@ void DibrWidget::setStyle(int idx)
     default: // 魂影
         m_ghostAlpha = 0.78f; m_glowAmt = 0.95f; m_grade = 1.00f; break;
     }
+    update();
+}
+
+void DibrWidget::setBlink(float v)
+{
+    m_blink = qBound(0.0f, v, 1.0f);
     update();
 }
 
@@ -193,6 +206,16 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
         m_hasMatte = true;
     } else {
         m_hasMatte = false;
+    }
+
+    QImage blinkImg(dir + "/blink.png");
+    if (!blinkImg.isNull()) {
+        m_blinkImg = blinkImg.convertToFormat(QImage::Format_RGBA8888)
+                             .scaled(m_w, m_h, Qt::IgnoreAspectRatio,
+                                     Qt::SmoothTransformation);
+        m_hasBlink = true;
+    } else {
+        m_hasBlink = false;
     }
 
     if (m_hasMatte) {
@@ -271,6 +294,17 @@ void DibrWidget::initializeGL()
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, m_w, m_h, 0, GL_RED,
                      GL_UNSIGNED_BYTE, m_matte.constBits());
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    }
+
+    if (m_hasBlink && !m_blinkImg.isNull()) {
+        glGenTextures(1, &m_texBlink);
+        glBindTexture(GL_TEXTURE_2D, m_texBlink);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_w, m_h, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, m_blinkImg.constBits());
     }
 
     if (m_hasMatte && !m_glow.isNull()) {
@@ -397,6 +431,13 @@ void DibrWidget::paintGL()
         m_prog.setUniformValue("uGlow", 4);
     }
     m_prog.setUniformValue("uHasMatte", m_hasMatte ? 1 : 0);
+    if (m_hasBlink && m_texBlink) {
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, m_texBlink);
+        m_prog.setUniformValue("uTexBlink", 5);
+    }
+    m_prog.setUniformValue("uHasBlink", m_hasBlink ? 1 : 0);
+    m_prog.setUniformValue("uBlink", m_blink);
     m_prog.setUniformValue("uGhostAlpha", m_ghostAlpha);
     m_prog.setUniformValue("uGlowAmt", m_glowAmt);
     m_prog.setUniformValue("uGrade", m_grade);
