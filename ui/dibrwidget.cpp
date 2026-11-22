@@ -124,6 +124,21 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
                           Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                  .scaled(m_img.width(), m_img.height(),
                          Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+
+    // 背景板：优先用 tools/make_bg.py 生成的 bg.png（已把主体挖掉并修补）。
+    // 没有就退回模糊原图——那样主体移开后会露出自己的影子（鬼影）。
+    QImage bgImg(dir + "/bg.png");
+    if (!bgImg.isNull()) {
+        m_bg = bgImg.convertToFormat(QImage::Format_RGBA8888)
+                       .scaled(m_img.width(), m_img.height(),
+                               Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                       .scaled(qMax(8, m_img.width() / 8), qMax(8, m_img.height() / 8),
+                               Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                       .scaled(m_img.width(), m_img.height(),
+                               Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    } else {
+        m_bg = m_blur;
+    }
     if (m_img.width() != m_w || m_img.height() != m_h) {
         m_w = m_img.width();
         m_h = m_img.height();
@@ -185,7 +200,7 @@ void DibrWidget::initializeGL()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_w, m_h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                 m_blur.constBits());
+                 m_bg.constBits());
 
     glGenTextures(1, &m_texDepth);
     glBindTexture(GL_TEXTURE_2D, m_texDepth);

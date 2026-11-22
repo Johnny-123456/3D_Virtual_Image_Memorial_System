@@ -9,6 +9,7 @@
 #include <cmath>
 
 #include "dibrwidget.h"
+#include "eyelink.h"
 
 /**
  * 2.5D 怀念影像 —— 查看器界面
@@ -29,7 +30,8 @@
 class Viewer : public QWidget
 {
 public:
-    Viewer(const QString &asset, QWidget *parent = nullptr) : QWidget(parent)
+    Viewer(const QString &asset, quint16 port, QWidget *parent = nullptr)
+        : QWidget(parent)
     {
         setWindowTitle(QString::fromUtf8("2.5D 怀念影像"));
         setStyleSheet("background:#000;");
@@ -55,6 +57,10 @@ public:
         m_timer = new QTimer(this);
         m_timer->setInterval(16);
         connect(m_timer, &QTimer::timeout, this, [this] {
+            if (m_tracking && !m_link->active()) {
+                m_tracking = false;
+                updateHud();
+            }
             if (m_auto) {
                 const float t = m_clock.elapsed() / 1000.0f;
                 m_gl->setEye(0.72f * std::sin(t * 0.85f),
@@ -63,6 +69,23 @@ public:
         });
         m_timer->start();
         m_clock.start();
+
+        // 眼位追踪（UDP）。收不到数据时自动退回鼠标/自动摆动。
+        m_link = new EyeLink(this);
+        QString lerr;
+        if (!m_link->start(port, &lerr))
+            qWarning() << "眼位 UDP 绑定失败:" << lerr << "端口" << port;
+        connect(m_link, &EyeLink::eye, this, [this](float ex, float ey) {
+            m_tracking = true;
+            m_auto = false;
+            m_eyeX = ex;
+            m_eyeY = ey;
+            m_gl->setEye(ex, ey);
+            updateHud();
+        });
+        connect(m_link, &EyeLink::lost, this, [this] {
+            if (m_tracking) { m_tracking = false; updateHud(); }
+        });
 
         updateHud();
         m_gl->setFocus();
@@ -86,6 +109,7 @@ protected:
 
     void mouseMoveEvent(QMouseEvent *e) override
     {
+        if (m_tracking) return;      // 追踪中，鼠标不抢占
         m_auto = false;
         const float nx = (e->pos().x() / float(width())) * 2.0f - 1.0f;
         const float ny = (e->pos().y() / float(height())) * 2.0f - 1.0f;
@@ -125,7 +149,9 @@ private:
             .arg(double(m_gl->split()), 0, 'f', 2)
             .arg(double(m_eyeX), 0, 'f', 2)
             .arg(double(m_eyeY), 0, 'f', 2)
-            .arg(m_auto ? QString::fromUtf8("自动摆动") : QString::fromUtf8("手动")));
+            .arg(m_tracking ? QString::fromUtf8("眼动追踪")
+                            : (m_auto ? QString::fromUtf8("自动摆动")
+                                      : QString::fromUtf8("鼠标"))));
         m_hud->adjustSize();
     }
 
@@ -137,6 +163,8 @@ private:
     bool m_showHud = true;
     float m_eyeX = 0.0f;
     float m_eyeY = 0.0f;
+    EyeLink *m_link = nullptr;
+    bool m_tracking = false;
 };
 
 int main(int argc, char **argv)
@@ -150,10 +178,11 @@ int main(int argc, char **argv)
     QCommandLineOption optFull({"f", "fullscreen"}, "全屏启动");
     QCommandLineOption optFocus("focus", "覆盖焦点深度(米)", "m");
     QCommandLineOption optGain("gain", "覆盖视差强度", "px");
-    p.addOptions({optAsset, optSnap, optEye, optFull, optFocus, optGain});
+    QCommandLineOption optPort("port", "眼位 UDP 端口", "p", "9999");
+    p.addOptions({optAsset, optSnap, optEye, optFull, optFocus, optGain, optPort});
     p.process(app);
 
-    Viewer v(p.value(optAsset));
+    Viewer v(p.value(optAsset), quint16(p.value(optPort).toUShort()));
 
     if (p.isSet(optSnap)) {
         const QStringList xy = p.value(optEye).split(',');

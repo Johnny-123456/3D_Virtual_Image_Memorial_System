@@ -80,6 +80,16 @@ def main() -> int:
     z_focus = float(np.median(depth[fy0:fy1, fx0:fx1]))
 
     cv2.imwrite(os.path.join(out_dir, "rgb.png"), rgb)
+
+    # 顺手生成背景板（去掉主体），供 DIBR 背景层使用，避免鬼影
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from make_bg import make_background
+        bg = make_background(rgb, depth, float(np.median(depth)) if False else
+                             max(float(np.percentile(depth, 15)) * 1.8, 1.0))
+        cv2.imwrite(os.path.join(out_dir, "bg.png"), bg)
+    except Exception as e:
+        print("  背景板生成失败（不影响主流程）:", e)
     depth.tofile(os.path.join(out_dir, "depth.f32"))
 
     meta = {

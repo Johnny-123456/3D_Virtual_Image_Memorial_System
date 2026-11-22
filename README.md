@@ -18,7 +18,7 @@
 | Step 2 | 单目深度模型上 NPU | ✅ DA-V2-Small fp16，763 ms/帧（离线用，精度合格） |
 | Step 3b | 单目相对深度 → 米制（用双目做标尺） | ✅ 肖像 1–2m 中位误差 143 mm / 11.9% |
 | Step 4 | DIBR 网格位移渲染 + Qt 界面 | ✅ 板端 57.9 fps |
-| Step 5 | 观众眼位追踪 | ⬜ |
+| Step 5 | 观众眼位追踪 | ✅ YOLOv8-pose 12fps + UDP 驱动视点 |
 | Step 6–8 | 微动 / 美术 / 魂盒 | ⬜ |
 
 ## 目录结构
@@ -50,6 +50,21 @@ cd ui && mkdir -p build && cd build && cmake .. && make -j4
 ```
 
 交互：鼠标=视点、空格=自动摆动、`H`=HUD、`F`=全屏、`+/-`=视差、`[/]`=焦点、`Q`=退出。
+
+### 眼动追踪（Step 5）
+
+两个进程，UDP 通信（`127.0.0.1:9999`，一行 `ex,ey`）：
+
+```bash
+# 终端 1：追踪器（占相机）
+python3 -u track/eye_tracker.py --print
+
+# 终端 2：渲染器（不占相机）
+./ui/build/memorial_viewer --asset assets/portrait
+```
+
+收不到追踪数据时渲染器自动退回鼠标/自动摆动模式，可单独演示。
+注意用 **fp16** 的 `yolov8n-pose.rknn`，int8 版置信度全 0 检不出人。
 
 ## 常用命令
 

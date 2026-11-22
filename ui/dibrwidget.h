@@ -63,6 +63,7 @@ private:
     int m_w = 0, m_h = 0;
     QImage m_img;
     QImage m_blur;
+    QImage m_bg;
     QVector<float> m_depth;
     float m_zFocus = 5.0f, m_zMin = 0.3f, m_zMax = 10.0f;
     float m_split = 2.0f;
