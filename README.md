@@ -19,7 +19,8 @@
 | Step 3b | 单目相对深度 → 米制（用双目做标尺） | ✅ 肖像 1–2m 中位误差 143 mm / 11.9% |
 | Step 4 | DIBR 网格位移渲染 + Qt 界面 | ✅ 板端 57.9 fps |
 | Step 5 | 观众眼位追踪 | ✅ YOLOv8-pose 12fps + UDP 驱动视点 |
-| Step 6–8 | 微动 / 美术 / 魂盒 | ⬜ |
+| Step 6 | 人像 matte（MODNet）| ✅ 286ms/帧，离线一次性 |
+| Step 7–8 | 微动 / 美术 / 魂盒 | ⬜ |
 
 ## 目录结构
 
@@ -36,8 +37,12 @@ assets/      采集产物（用户数据，不入库）
 板端 Qt5 + OpenGL 查看器：网格位移 DIBR + 双层合成 + 呼吸微动 + HUD。
 
 ```bash
-# 生成渲染资产（截一帧 + 单目稠密深度）
+# 生成渲染资产（截一帧 + 单目稠密深度 + matte + 背景板）
 python3 tools/make_asset.py --name demo
+
+# 给已有资产单独补 matte / 背景板
+python3 tools/make_matte.py assets/demo
+python3 tools/make_bg.py assets/demo
 
 # 构建
 cd ui && mkdir -p build && cd build && cmake .. && make -j4

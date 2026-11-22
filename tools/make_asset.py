@@ -81,12 +81,28 @@ def main() -> int:
 
     cv2.imwrite(os.path.join(out_dir, "rgb.png"), rgb)
 
+    # 生成人像 matte（MODNet），供渲染器做精确前景合成
+    matte = None
+    try:
+        from capture.matte import PortraitMatte
+        mp = os.path.join(ROOT, "models", "modnet.rknn")
+        if os.path.isfile(mp):
+            print("  生成 matte ...")
+            with PortraitMatte(mp) as pm:
+                matte = pm.infer(rgb)
+            cv2.imwrite(os.path.join(out_dir, "matte.png"),
+                        (matte * 255).round().astype(np.uint8))
+            print("  matte 覆盖 %.1f%%" % (float((matte > 0.5).mean()) * 100))
+    except Exception as e:
+        print("  matte 生成失败（不影响主流程）:", e)
+
     # 顺手生成背景板（去掉主体），供 DIBR 背景层使用，避免鬼影
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from make_bg import make_background
-        bg = make_background(rgb, depth, float(np.median(depth)) if False else
-                             max(float(np.percentile(depth, 15)) * 1.8, 1.0))
+        bg = make_background(rgb, depth,
+                             max(float(np.percentile(depth, 15)) * 1.8, 1.0),
+                             matte=matte)
         cv2.imwrite(os.path.join(out_dir, "bg.png"), bg)
     except Exception as e:
         print("  背景板生成失败（不影响主流程）:", e)

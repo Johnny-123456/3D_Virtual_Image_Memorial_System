@@ -50,6 +50,8 @@ static const char *kFrag = R"(
 uniform sampler2D uTex;
 uniform sampler2D uTexBlur;
 uniform sampler2D uDepthTex;
+uniform sampler2D uMatte;
+uniform int uHasMatte;
 uniform float uSplit;
 uniform int uPass;
 
@@ -70,10 +72,16 @@ void main() {
         bg *= 1.0 - dot(db, db) * 0.45;
         gl_FragColor = vec4(bg * 0.88, 1.0);
     } else {
-        // 前景层：只画比分割面更近的部分，用真 alpha 与背景混合
-        float z = texture2D(uDepthTex, vUV).r;
-        float t = clamp((z - uSplit * 0.80) / max(uSplit * 0.40, 1e-3), 0.0, 1.0);
-        float alpha = 1.0 - t;
+        // 前景层：优先用 MODNet 的人像 alpha（发丝级），
+        // 没有 matte 时退回深度阈值（粗糙但能用）。
+        float alpha;
+        if (uHasMatte == 1) {
+            alpha = texture2D(uMatte, vUV).r;
+        } else {
+            float z = texture2D(uDepthTex, vUV).r;
+            float t = clamp((z - uSplit * 0.80) / max(uSplit * 0.40, 1e-3), 0.0, 1.0);
+            alpha = 1.0 - t;
+        }
         if (alpha <= 0.002) discard;
         gl_FragColor = vec4(c, alpha);
     }
@@ -144,6 +152,16 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
         m_h = m_img.height();
     }
 
+    QImage matteImg(dir + "/matte.png");
+    if (!matteImg.isNull()) {
+        m_matte = matteImg.convertToFormat(QImage::Format_Grayscale8)
+                          .scaled(m_w, m_h, Qt::IgnoreAspectRatio,
+                                  Qt::SmoothTransformation);
+        m_hasMatte = true;
+    } else {
+        m_hasMatte = false;
+    }
+
     QFile df(dir + "/depth.f32");
     if (!df.open(QIODevice::ReadOnly)) return fail("打不开 depth.f32");
     const qint64 need = qint64(m_w) * m_h * sizeof(float);
@@ -201,6 +219,19 @@ void DibrWidget::initializeGL()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_w, m_h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                  m_bg.constBits());
+
+    if (m_hasMatte) {
+        glGenTextures(1, &m_texMatte);
+        glBindTexture(GL_TEXTURE_2D, m_texMatte);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, m_w, m_h, 0, GL_RED,
+                     GL_UNSIGNED_BYTE, m_matte.constBits());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    }
 
     glGenTextures(1, &m_texDepth);
     glBindTexture(GL_TEXTURE_2D, m_texDepth);
@@ -302,6 +333,12 @@ void DibrWidget::paintGL()
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, m_texBlur);
     m_prog.setUniformValue("uTexBlur", 2);
+    if (m_hasMatte && m_texMatte) {
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, m_texMatte);
+        m_prog.setUniformValue("uMatte", 3);
+    }
+    m_prog.setUniformValue("uHasMatte", m_hasMatte ? 1 : 0);
 
     m_prog.setUniformValue("uZFoc", m_zFocus);
     m_prog.setUniformValue("uEyeX", m_eyeX);

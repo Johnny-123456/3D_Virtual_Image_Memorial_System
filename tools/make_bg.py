@@ -18,9 +18,16 @@ import numpy as np
 
 
 def make_background(rgb: np.ndarray, depth: np.ndarray, z_split: float,
-                    dilate: int = 9) -> np.ndarray:
-    """把深度小于 z_split 的主体区域挖掉并修补，返回背景图。"""
-    mask = ((depth > 0) & (depth < z_split)).astype(np.uint8) * 255
+                    dilate: int = 9, matte: np.ndarray = None) -> np.ndarray:
+    """把主体区域挖掉并修补，返回背景图。
+
+    有 matte（人像 alpha）时优先用它——比深度阈值精确得多，
+    头发、肩膀这些深度和背景接近的地方也能正确挖除。
+    """
+    if matte is not None:
+        mask = (matte > 0.15).astype(np.uint8) * 255
+    else:
+        mask = ((depth > 0) & (depth < z_split)).astype(np.uint8) * 255
     if mask.any():
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate, dilate))
         mask = cv2.dilate(mask, k, iterations=2)
@@ -45,7 +52,12 @@ def main() -> int:
         print("读不到 rgb.png")
         return 1
 
-    bg = make_background(rgb, depth, z_split)
+    matte = None
+    mp = os.path.join(d, "matte.png")
+    if os.path.isfile(mp):
+        matte = cv2.imread(mp, cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255.0
+        print("  使用 matte.png 作为掩码（比深度阈值精确）")
+    bg = make_background(rgb, depth, z_split, matte=matte)
     out = os.path.join(d, "bg.png")
     cv2.imwrite(out, bg)
 
