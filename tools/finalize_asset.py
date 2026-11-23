@@ -69,6 +69,14 @@ def main() -> int:
     le, re_, iod, mid = pair
     print(f"瞳距 {iod:.1f}px  中点 ({mid[0]:.0f},{mid[1]:.0f})")
 
+    # 守卫：瞳距过小 = 检测到的是远处的人（或背景里的同事），不是受采者。
+    # 实测踩过：镜头前没人时会选中画面深处 2.8px 瞳距的目标，
+    # 流程照样产出资产，但 head.png 覆盖 0%，渲染完全无效。
+    if iod < 45.0:
+        print(f"✗ 受采者离得太远或不在画面中央（瞳距仅 {iod:.1f}px，至少 45px）")
+        print("  请站到镜头前 1.2~1.5 m 处、位于画面中央后重试")
+        return 3
+
     cv2.imwrite(os.path.join(a.asset_dir, "blink.png"),
                 make_blink(img, [(le["x"], le["y"]), (re_["x"], re_["y"])], iod))
     print("  blink.png")
