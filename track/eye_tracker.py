@@ -172,7 +172,7 @@ def main() -> int:
                     help="循环回放一张图代替相机（无真人在场时测延迟用）")
     ap.add_argument("--stamp", action="store_true",
                     help="UDP 包末尾附带抓帧时刻（epoch 秒），供渲染端量端到端延迟")
-    ap.add_argument("--buffers", type=int, default=1,
+    ap.add_argument("--buffers", type=int, default=2,
                     help="V4L2 缓冲深度（默认 1：追踪只要最新帧，越深延迟越大）")
     a = ap.parse_args()
 

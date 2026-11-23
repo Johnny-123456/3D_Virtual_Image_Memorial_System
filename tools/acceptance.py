@@ -226,7 +226,7 @@ def cmd_latency(a) -> int:
     print(f"资产 {os.path.basename(asset_dir)}   追踪 {statistics.median(fps):.1f} fps"
           if fps else "")
     print("  端到端分解：")
-    print(f"    相机帧龄（读到时这帧已经过了）   {cam:7.1f} ms   ← 12fps 消费 31fps 流的代价")
+    print(f"    相机帧龄（读到时这帧已经过了）   {cam:7.1f} ms   ← 驱动缓冲 + 解码延迟")
     print(f"    推理 + UDP + Qt 接收            {net:7.1f} ms   （其中推理 ~{inf:.0f} ms）")
     print(f"    渲染呈现（60fps，均值）          {present:7.1f} ms")
     print(f"    ────────────────────────────────────────")
