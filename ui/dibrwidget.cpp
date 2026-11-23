@@ -116,8 +116,11 @@ void main() {
         // pass 2：边缘辉光，叠加混合（glBlendFunc(GL_ONE, GL_ONE)）
         float m = texture2D(uMatte, vUV).r;
         float g = texture2D(uGlow, vUV).r;
+        // 只保留明显的外扩带。直接 pow(rim,0.6)*2.2 会把 8-bit 量化的
+        // 微小残差放大成与网格对齐的竖条（实测踩过），这里用 smoothstep
+        // 做门限：低于 0.05 的一律不发光，背景不会被叠加到过曝。
         float rim = clamp(g - m, 0.0, 1.0);
-        rim = pow(rim, 0.6) * uGlowAmt * 2.2;   // 提亮，让辉光真的可见
+        rim = smoothstep(0.05, 0.40, rim) * uGlowAmt * 1.1;
         vec3 warm = vec3(1.0, 0.87, 0.70);
         gl_FragColor = vec4(warm * rim, 1.0);
     }
