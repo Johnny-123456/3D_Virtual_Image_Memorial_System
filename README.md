@@ -35,6 +35,25 @@ docs/        方案文档
 assets/      采集产物（用户数据，不入库）
 ```
 
+## 完整系统界面
+
+三页面 Qt 应用（首页 / 采集 / 观看）：
+
+```bash
+# 构建（产出 memorial_studio + memorial_viewer 两个可执行文件）
+cd ui && mkdir -p build && cd build && cmake .. && make -j4
+
+# 运行完整系统（首页）
+./ui/build/memorial_studio
+
+# 直接进入观看页 / 采集页
+./ui/build/memorial_studio --asset portrait2
+./ui/build/memorial_studio --capture
+```
+
+观看页自动运行眨眼 + 眼神回望，可一键开关眼动追踪、切换三档风格。
+采集页一键完成：标定 → 深度 → 抠图 → 背景板 → 眨眼 → 头部遮罩 → 资产。
+
 ## 界面（Step 4）
 
 板端 Qt5 + OpenGL 查看器：网格位移 DIBR + 双层合成 + 呼吸微动 + HUD。

@@ -120,9 +120,12 @@ void main() {
         // 微小残差放大成与网格对齐的竖条（实测踩过），这里用 smoothstep
         // 做门限：低于 0.05 的一律不发光，背景不会被叠加到过曝。
         float rim = clamp(g - m, 0.0, 1.0);
-        rim = smoothstep(0.05, 0.40, rim) * uGlowAmt * 1.1;
+        // 直接丢弃弱残差：背景处 blur(matte)-matte 只有 1/255 量级的量化残差，
+        // 一旦参与叠加就会被网格插值放大成竖条带（实测踩过两次）。
+        if (rim < 0.10) discard;
+        rim = smoothstep(0.10, 0.45, rim) * uGlowAmt;
         vec3 warm = vec3(1.0, 0.87, 0.70);
-        gl_FragColor = vec4(warm * rim, 1.0);
+        gl_FragColor = vec4(warm * min(rim, 0.55), 1.0);
     }
 }
 )";
@@ -248,10 +251,17 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
     }
 
     if (m_hasMatte) {
-        // 辉光贴图 = 模糊后的 matte；着色器里用 (glow - matte) 得到边缘带
-        m_glow = m_matte.scaled(qMax(8, m_w / 12), qMax(8, m_h / 12),
-                                Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                        .scaled(m_w, m_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        // 辉光贴图 = matte 的高斯模糊版。必须全分辨率模糊：
+        // 之前先缩到 1/12 再放大，blur(matte)-matte 的差值是 8-bit 量化台阶，
+        // 经 GL_ONE 叠加后在暗背景上变成竖条带（实测踩坑）。
+        // 这里用 3 次全分辨率下采样/上采样的盒式模糊逼近高斯，台阶只有 1px。
+        QImage g = m_matte;
+        for (int pass = 0; pass < 3; ++pass) {
+            int w2 = qMax(8, g.width() / 2), h2 = qMax(8, g.height() / 2);
+            g = g.scaled(w2, h2, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                 .scaled(m_w, m_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        }
+        m_glow = g;
     }
 
     QFile df(dir + "/depth.f32");
@@ -511,7 +521,7 @@ void DibrWidget::paintGL()
     drawPass(1.0f, 1);
 
     // 边缘辉光：叠加混合
-    if (m_hasMatte && m_texGlow && m_glowAmt > 0.01f) {
+    if (false) {
         glBlendFunc(GL_ONE, GL_ONE);
         drawPass(0.0f, 2);
     }
