@@ -22,6 +22,8 @@ attribute vec2 aUV;
 uniform sampler2D uDepthTex;
 uniform float uGain, uZFoc, uEyeX, uEyeY, uHalfW, uHalfH, uFitX, uFitY;
 uniform float uTime, uMaxShift;
+uniform sampler2D uHeadMask;
+uniform float uGaze, uGazeGain;
 
 varying vec2 vUV;
 
@@ -35,6 +37,14 @@ void main() {
     disp = clamp(disp, vec2(-uMaxShift), vec2(uMaxShift));
 
     vec2 pos = aPos + disp;
+
+    // 眼神回望：头部区域额外朝观众方向偏移。
+    // 视差让头随观众反向滑动（像窗外的物体），这里反向补回来，
+    // 净效果是"头转过来看你"。强度由 uGaze 平滑控制。
+    if (uGaze > 0.001) {
+        float hm = texture2D(uHeadMask, aUV).r;
+        pos += vec2(uEyeX, uEyeY) * uGaze * uGazeGain * hm;
+    }
 
     // 呼吸：以画面中心为基准的极轻微纵向缩放 + 横向漂移
     pos.y *= 1.0 + 0.0026 * sin(uTime * 1.6);
@@ -141,6 +151,12 @@ void DibrWidget::setBlink(float v)
     update();
 }
 
+void DibrWidget::setGaze(float v)
+{
+    m_gaze = qBound(0.0f, v, 1.0f);
+    update();
+}
+
 void DibrWidget::setEye(float ex, float ey)
 {
     m_eyeX = qBound(-1.0f, ex, 1.0f);
@@ -218,6 +234,16 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
         m_hasBlink = false;
     }
 
+    QImage headImg(dir + "/head.png");
+    if (!headImg.isNull()) {
+        m_headMask = headImg.convertToFormat(QImage::Format_Grayscale8)
+                             .scaled(m_w, m_h, Qt::IgnoreAspectRatio,
+                                     Qt::SmoothTransformation);
+        m_hasHead = true;
+    } else {
+        m_hasHead = false;
+    }
+
     if (m_hasMatte) {
         // 辉光贴图 = 模糊后的 matte；着色器里用 (glow - matte) 得到边缘带
         m_glow = m_matte.scaled(qMax(8, m_w / 12), qMax(8, m_h / 12),
@@ -293,6 +319,19 @@ void DibrWidget::initializeGL()
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, m_w, m_h, 0, GL_RED,
                      GL_UNSIGNED_BYTE, m_matte.constBits());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    }
+
+    if (m_hasHead && !m_headMask.isNull()) {
+        glGenTextures(1, &m_texHead);
+        glBindTexture(GL_TEXTURE_2D, m_texHead);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, m_w, m_h, 0, GL_RED,
+                     GL_UNSIGNED_BYTE, m_headMask.constBits());
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     }
 
@@ -436,6 +475,13 @@ void DibrWidget::paintGL()
         glBindTexture(GL_TEXTURE_2D, m_texBlink);
         m_prog.setUniformValue("uTexBlink", 5);
     }
+    if (m_hasHead && m_texHead) {
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, m_texHead);
+        m_prog.setUniformValue("uHeadMask", 6);
+    }
+    m_prog.setUniformValue("uGaze", m_hasHead ? m_gaze : 0.0f);
+    m_prog.setUniformValue("uGazeGain", 20.0f);
     m_prog.setUniformValue("uHasBlink", m_hasBlink ? 1 : 0);
     m_prog.setUniformValue("uBlink", m_blink);
     m_prog.setUniformValue("uGhostAlpha", m_ghostAlpha);

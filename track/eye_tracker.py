@@ -42,10 +42,13 @@ import cv2
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REHAB = os.path.expanduser("~/rehab-coach/src/backend/vision")
+_REHAB = os.path.expanduser("~/rehab-coach/src/backend")
+REHAB = os.path.join(_REHAB, "vision")
 MODEL = os.path.expanduser("~/rehab-coach/models/yolov8n-pose.rknn")
 DEV = "/dev/v4l/by-id/usb-CCB_Camera_CCB_Camera-video-index0"
 
+if _REHAB not in sys.path:
+    sys.path.insert(0, _REHAB)
 if REHAB not in sys.path:
     sys.path.insert(0, REHAB)
 

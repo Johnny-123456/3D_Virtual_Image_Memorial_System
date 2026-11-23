@@ -99,7 +99,9 @@ def main() -> int:
     # 眨眼贴图
     try:
         import sys as _sys
-        _sys.path.insert(0, os.path.expanduser("~/rehab-coach/src/backend/vision"))
+        __REHAB = os.path.expanduser("~/rehab-coach/src/backend")
+sys.path.insert(0, os.path.join(_REHAB, "vision"))
+sys.path.insert(0, _REHAB)   # pose_rknn 多目标时会 import core.*
         from pose_rknn import RknnPoseBackend
         from capture.blink import make_blink
         pb = RknnPoseBackend(os.path.expanduser(

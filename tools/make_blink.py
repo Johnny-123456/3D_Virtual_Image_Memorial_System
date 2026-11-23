@@ -16,9 +16,12 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.expanduser("~/rehab-coach/src/backend/vision"))
+_REHAB = os.path.expanduser("~/rehab-coach/src/backend")
+sys.path.insert(0, os.path.join(_REHAB, "vision"))
+sys.path.insert(0, _REHAB)   # pose_rknn 多目标时会 import core.*
 
 from capture.blink import make_blink  # noqa: E402
+from capture.landmarks import detect_main_person, eye_pair  # noqa: E402
 
 POSE_MODEL = os.path.expanduser("~/rehab-coach/models/yolov8n-pose.rknn")
 
@@ -36,20 +39,18 @@ def main() -> int:
 
     from pose_rknn import RknnPoseBackend
     pose = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
-    det = pose.detect(img)
+    det = detect_main_person(pose, img)
     pose.release()
 
-    if not det:
-        print("✗ 未检测到人，无法定位眼睛")
-        return 2
-    kp = det["keypoints_2d"]
-    if "left_eye" not in kp or "right_eye" not in kp:
+    pair = eye_pair(det)
+    if not pair:
         print("✗ 未检测到双眼关键点")
         return 2
-
-    le, re_ = kp["left_eye"], kp["right_eye"]
+    le, re_, iod, _mid = pair
+    le = {"x": le["x"], "y": le["y"], "conf": le["conf"]}
+    re_ = {"x": re_["x"], "y": re_["y"], "conf": re_["conf"]}
     eyes = [(le["x"], le["y"]), (re_["x"], re_["y"])]
-    inter = float(np.hypot(le["x"] - re_["x"], le["y"] - re_["y"]))
+    inter = iod
     print(f"左眼 ({le['x']:.0f},{le['y']:.0f})  右眼 ({re_['x']:.0f},{re_['y']:.0f})  "
           f"瞳距 {inter:.1f} px  置信度 {le['conf']:.2f}/{re_['conf']:.2f}")
 

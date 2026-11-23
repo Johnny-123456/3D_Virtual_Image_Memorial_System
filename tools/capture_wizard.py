@@ -35,7 +35,9 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.expanduser("~/rehab-coach/src/backend/vision"))
+_REHAB = os.path.expanduser("~/rehab-coach/src/backend")
+sys.path.insert(0, os.path.join(_REHAB, "vision"))
+sys.path.insert(0, _REHAB)   # pose_rknn 多目标时会 import core.*
 
 from capture.camera_io import CAMERA_BY_ID, FALLBACK_DEVICE          # noqa: E402
 from capture.pipeline import (MIN_DISPARITY, NUM_DISPARITIES,        # noqa: E402

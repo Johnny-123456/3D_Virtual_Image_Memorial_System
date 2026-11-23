@@ -66,6 +66,13 @@ public:
                 m_gl->setEye(0.72f * std::sin(t * 0.85f),
                              0.28f * std::sin(t * 0.52f));
             }
+            // 眼神回望：追踪到人时平滑升到 1，丢失时降回 0
+            if (m_gl->hasHeadMask() && !m_gazeLock) {
+                const float target = m_tracking ? 1.0f : 0.0f;
+                m_gaze += (target - m_gaze) * 0.06f;
+                m_gl->setGaze(m_gaze);
+            }
+
             // 眨眼：随机间隔 2.5~6 s，单次 160 ms（闭 64ms / 停 32ms / 睁 64ms）
             if (m_gl->hasBlink()) {
                 const float t = m_clock.elapsed() / 1000.0f;
@@ -122,6 +129,7 @@ public:
     DibrWidget *gl() { return m_gl; }
     /// 快照模式必须关掉自动摆动，否则定时器会把 --eye 覆盖掉
     void setAuto(bool a) { m_auto = a; }
+    void setGazeLock(bool v) { m_gazeLock = v; }
     void toggleFullscreen()
     {
         if (isFullScreen()) showNormal();
@@ -195,6 +203,8 @@ private:
     bool m_showHud = true;
     float m_eyeX = 0.0f;
     float m_eyeY = 0.0f;
+    float m_gaze = 0.0f;
+    bool m_gazeLock = false;   // 快照测试时锁定，不被定时器衰减
     bool m_blinking = false;
     float m_blinkStart = 0.0f;
     float m_nextBlink = 2.0f;
@@ -222,8 +232,9 @@ int main(int argc, char **argv)
     QCommandLineOption optPort("port", "眼位 UDP 端口", "p", "9999");
     QCommandLineOption optStyle("look", "风格 0清晰/1回忆/2魂影", "i", "0");
     QCommandLineOption optBlink("blink", "快照时固定眨眼量 0..1", "v");
+    QCommandLineOption optGaze("gaze", "快照时固定回望强度 0..1", "v");
     p.addOptions({optAsset, optSnap, optEye, optFull, optFocus, optGain,
-                  optPort, optStyle, optBlink});
+                  optPort, optStyle, optBlink, optGaze});
     p.process(app);
 
     Viewer v(p.value(optAsset), quint16(p.value(optPort).toUShort()));
@@ -235,6 +246,10 @@ int main(int argc, char **argv)
         v.setAuto(false);
         v.gl()->setStyle(p.value(optStyle).toInt());
         if (p.isSet(optBlink)) v.gl()->setBlink(p.value(optBlink).toFloat());
+        if (p.isSet(optGaze)) {
+            v.setGazeLock(true);
+            v.gl()->setGaze(p.value(optGaze).toFloat());
+        }
         if (p.isSet(optFocus)) v.gl()->setFocusDepth(p.value(optFocus).toFloat());
         if (p.isSet(optGain)) v.gl()->setGain(p.value(optGain).toFloat());
         v.gl()->setEye(ex, ey);

@@ -38,6 +38,8 @@ public:
 
     void setStyle(int idx);          ///< 0 清晰 / 1 回忆 / 2 魂影
     void setBlink(float v);          ///< 0 睁眼 .. 1 闭眼
+    void setGaze(float v);            ///< 0..1 眼神回望强度
+    bool hasHeadMask() const { return m_hasHead; }
     bool hasBlink() const { return m_hasBlink; }
     int style() const { return m_style; }
 
@@ -72,6 +74,7 @@ private:
     QImage m_matte;
     QImage m_glow;
     QImage m_blinkImg;
+    QImage m_headMask;
     QVector<float> m_depth;
     float m_zFocus = 5.0f, m_zMin = 0.3f, m_zMax = 10.0f;
     float m_split = 2.0f;
@@ -89,7 +92,9 @@ private:
     QOpenGLBuffer m_ibo{QOpenGLBuffer::IndexBuffer};
     QOpenGLVertexArrayObject m_vao;
     GLuint m_texColor = 0, m_texDepth = 0, m_texBlur = 0,
-           m_texMatte = 0, m_texGlow = 0, m_texBlink = 0;
+           m_texMatte = 0, m_texGlow = 0, m_texBlink = 0, m_texHead = 0;
+    bool m_hasHead = false;
+    float m_gaze = 0.0f;         // 0..1 回望强度
     bool m_hasBlink = false;
     float m_blink = 0.0f;
     bool m_hasMatte = false;
