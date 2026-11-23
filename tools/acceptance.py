@@ -41,7 +41,7 @@ TRACKER = os.path.join(ROOT, "track", "eye_tracker.py")
 FX_PX = 1198.7
 CAM_W = 1280            # 追踪用左目图像宽度
 SENS = 0.3              # eye_tracker 的 --sens 默认值（必须与那边一致）
-DEFAULT_GAIN = 62.0     # dibrwidget.h 里 m_gain 的默认值（必须与那边一致）
+DEFAULT_GAIN = 70.0     # dibrwidget.h 里 m_gain 的默认值（必须与那边一致）
 
 # §8 第 1 条：头动 ±15 cm，人物相对背景反向位移 ≥ 8 px
 CRITERIA_PARALLAX_PX = 8.0

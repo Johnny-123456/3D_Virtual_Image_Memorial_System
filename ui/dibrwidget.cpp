@@ -186,6 +186,8 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
     m_w = meta.value("width").toInt();
     m_h = meta.value("height").toInt();
     m_zFocus = float(meta.value("z_focus").toDouble(5.0));
+    m_zSubject = float(meta.value("z_subject").toDouble(m_zFocus));
+    if (m_zSubject <= 0.05f) m_zSubject = m_zFocus;
     m_zMin = float(meta.value("z_min").toDouble(0.3));
     m_zMax = float(meta.value("z_max").toDouble(10.0));
     // 分割面优先取资产里的 z_split：只有比它更近的才走全视差
@@ -274,18 +276,33 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
     m_depth.resize(m_w * m_h);
     df.read(reinterpret_cast<char *>(m_depth.data()), need);
 
-    // 轮廓处的深度要"硬"，否则位移一大就从人像边缘拉出横向丝。
-    // 单目深度在头发/肩线与背景之间是平滑过渡的，网格顶点一个在近景一个在
-    // 远景，三角形被拉伸，可见轮廓就糊成一片（实测 gain 80、eye 0.78 时必现）。
-    // 做法：把主体深度向 matte 外侧扩一条 8px 的带——轮廓两侧顶点深度相同、
-    // 位移一致，拉伸被推到 alpha=0 的不可见区域。
+    // 主体层当成"一块刚性平面"：matte 覆盖到的像素，深度统一成主体距离。
+    //
+    // 为什么：单目深度在眉毛/发丝/肩线内部就有 20~30 cm 的抖动，位移一大，
+    // 同一张脸上不同部位走不同距离，边缘被拉出横向丝（实测 gain 250 / eye 0.5
+    // 时糊成一片扇形）。人像内部那点视差在 1.2~1.5 m 处根本看不出来，真正有用
+    // 的是"人整体相对背景平移"，所以把主体压平是净赚。
+    // 阈值取 6 而不是 128：matte 的软边（alpha 0.02~0.5）视觉上已是背景，但像素
+    // 颜色还混着人物，必须跟着主体一起走，否则会留下一圈"半透明残影"。
+    if (m_hasMatte && m_matte.width() == m_w && m_matte.height() == m_h
+        && m_zSubject > 0.05f) {
+        for (int y = 0; y < m_h; ++y) {
+            const uchar *sr = m_matte.constScanLine(y);
+            float *dr = m_depth.data() + size_t(y) * m_w;
+            for (int x = 0; x < m_w; ++x)
+                if (sr[x] >= 6) dr[x] = m_zSubject;
+        }
+    }
+
+    // 再把这块平面的深度向 matte 外侧扩 8px：网格三角形跨轮廓时两侧顶点深度
+    // 相同 → 位移一致 → 拉伸全部落在 alpha=0 的不可见区域，可见轮廓保持锐利。
     if (m_hasMatte && m_matte.width() == m_w && m_matte.height() == m_h) {
         const int band = 8;
         std::vector<uchar> known(size_t(m_w) * m_h);
         for (int y = 0; y < m_h; ++y) {
             const uchar *sr = m_matte.constScanLine(y);
             for (int x = 0; x < m_w; ++x)
-                known[size_t(y) * m_w + x] = sr[x] >= 128 ? 1 : 0;
+                known[size_t(y) * m_w + x] = sr[x] >= 6 ? 1 : 0;
         }
         std::vector<float> dz(m_depth.begin(), m_depth.end());
         for (int it = 0; it < band; ++it) {
