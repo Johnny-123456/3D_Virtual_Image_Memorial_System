@@ -11,7 +11,9 @@
     eye_x = (nose_x - cx) / (sens * half_w)
     eye_y = (nose_y - cy) / (sens * half_h)
 
-`--sens` 控制灵敏度：sens=1 时，头部移到画面边缘即达到满偏。
+`--sens` 控制灵敏度：eye 满偏对应鼻尖偏离中心 sens·(w/2) 像素。
+主语 1.2 m 处 fx≈1198.7，所以 sens=0.3 ↔ 横移约 19 cm 满偏；sens=1 要移到
+画面边缘（约 64 cm）才满偏——那样 §8 要求的"头动 15 cm 看得出视差"根本不够。
 
 为什么不做真正的 3D 反投影
 --------------------------
@@ -59,7 +61,7 @@ if ROOT not in sys.path:
 
 
 class EyeTracker:
-    def __init__(self, model: str = MODEL, sens: float = 1.0, alpha: float = 0.35):
+    def __init__(self, model: str = MODEL, sens: float = 0.3, alpha: float = 0.35):
         from pose_rknn import RknnPoseBackend
         self.pose = RknnPoseBackend(model, imgsz=640, conf_threshold=0.4)
         self.sens = sens
@@ -130,7 +132,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="眼位追踪 -> UDP")
     ap.add_argument("--image", default=None, help="离线验证单张图")
     ap.add_argument("--port", type=int, default=9999)
-    ap.add_argument("--sens", type=float, default=1.0)
+    ap.add_argument("--sens", type=float, default=0.3)
     ap.add_argument("--print", action="store_true")
     ap.add_argument("--replay", default=None, metavar="IMG",
                     help="循环回放一张图代替相机（无真人在场时测延迟用）")

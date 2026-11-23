@@ -40,7 +40,8 @@ TRACKER = os.path.join(ROOT, "track", "eye_tracker.py")
 # 相机内参（config/depth_calib.json）：fx 决定"横向 1 m 在画面里有多少像素"
 FX_PX = 1198.7
 CAM_W = 1280            # 追踪用左目图像宽度
-SENS = 1.0              # eye_tracker 的 --sens 默认值
+SENS = 0.3              # eye_tracker 的 --sens 默认值（必须与那边一致）
+DEFAULT_GAIN = 62.0     # dibrwidget.h 里 m_gain 的默认值（必须与那边一致）
 
 # §8 第 1 条：头动 ±15 cm，人物相对背景反向位移 ≥ 8 px
 CRITERIA_PARALLAX_PX = 8.0
@@ -156,7 +157,7 @@ def cmd_parallax(a) -> int:
     k_bg = d_bg * scale / a.eye
     rel = abs(k_sub - k_bg)                # px per unit eye（相对位移）
 
-    gain = a.gain if a.gain is not None else 40.0
+    gain = a.gain if a.gain is not None else DEFAULT_GAIN
     print(f"资产 {os.path.basename(asset_dir)}   gain={gain:.0f}   "
           f"渲染 {hw*2}x{hh*2}（快照 1/2，已换算回屏幕像素）")
     print(f"  人脸位移 {k_sub:+.2f} px / 单位 eye")

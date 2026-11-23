@@ -79,7 +79,7 @@ private:
     float m_zFocus = 5.0f, m_zMin = 0.3f, m_zMax = 10.0f;
     float m_split = 2.0f;
     float m_eyeX = 0.0f, m_eyeY = 0.0f;
-    float m_gain = 40.0f;
+    float m_gain = 62.0f;
     float m_ghostAlpha = 1.0f;   // 主体不透明度（魂影模式调低）
     float m_glowAmt = 0.35f;     // 边缘辉光强度
     float m_grade = 0.5f;        // 调色强度 0..1

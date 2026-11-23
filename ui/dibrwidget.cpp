@@ -5,6 +5,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <vector>
+
 #ifndef GL_R32F
 #define GL_R32F 0x822E
 #endif
@@ -271,6 +273,39 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
                                            .arg(df.size()).arg(need));
     m_depth.resize(m_w * m_h);
     df.read(reinterpret_cast<char *>(m_depth.data()), need);
+
+    // 轮廓处的深度要"硬"，否则位移一大就从人像边缘拉出横向丝。
+    // 单目深度在头发/肩线与背景之间是平滑过渡的，网格顶点一个在近景一个在
+    // 远景，三角形被拉伸，可见轮廓就糊成一片（实测 gain 80、eye 0.78 时必现）。
+    // 做法：把主体深度向 matte 外侧扩一条 8px 的带——轮廓两侧顶点深度相同、
+    // 位移一致，拉伸被推到 alpha=0 的不可见区域。
+    if (m_hasMatte && m_matte.width() == m_w && m_matte.height() == m_h) {
+        const int band = 8;
+        std::vector<uchar> known(size_t(m_w) * m_h);
+        for (int y = 0; y < m_h; ++y) {
+            const uchar *sr = m_matte.constScanLine(y);
+            for (int x = 0; x < m_w; ++x)
+                known[size_t(y) * m_w + x] = sr[x] >= 128 ? 1 : 0;
+        }
+        std::vector<float> dz(m_depth.begin(), m_depth.end());
+        for (int it = 0; it < band; ++it) {
+            bool changed = false;
+            std::vector<uchar> next = known;
+            for (int y = 1; y < m_h - 1; ++y) {
+                for (int x = 1; x < m_w - 1; ++x) {
+                    const size_t i = size_t(y) * m_w + x;
+                    if (known[i]) continue;
+                    const size_t nb[4] = {i - 1, i + 1, i - size_t(m_w), i + size_t(m_w)};
+                    for (size_t n : nb) {
+                        if (known[n]) { dz[i] = dz[n]; next[i] = 1; changed = true; break; }
+                    }
+                }
+            }
+            known.swap(next);
+            if (!changed) break;
+        }
+        m_depth = QVector<float>(dz.begin(), dz.end());
+    }
 
     m_ok = true;
     if (m_gl) {
