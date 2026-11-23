@@ -72,3 +72,31 @@ python3 tools/make_asset.py --name cat_demo
 
 （`make_asset.py` 会走 MODNet，抠图质量会差；这一步只看"视差渲染是否成立"。
 真正的动物资产需要先把 2.1 的抠图模型换掉。）
+
+---
+
+## 6. 已落地（2026-11-23）
+
+| 项 | 状态 |
+|---|---|
+| U²-Netp 转 rknn | ✅ `models/u2netp.rknn`，7.2 MB fp16（输入 1×3×320×320，7 个输出） |
+| 板端推理 | ✅ 190–212 ms/帧；与人像模型同图的掩码覆盖率一致（28.0% vs 28.0%） |
+| `capture/matte.py` | ✅ 新增 `SalientMatte` + `load_matte()`：文件名含 `u2net` 走通用抠图，否则 MODNet |
+| `tools/mono_calib.py` | ✅ `--matte-model`、`--species human\|animal`（animal 跳过瞳距守卫） |
+| `tools/finalize_asset.py` | ✅ `--species animal` 跳过眨眼/头部遮罩 |
+| 五文件资产渲染 | ✅ 无 `blink.png`/`head.png` 时正常出画（已实测） |
+
+**用法**（采集一只猫/狗）：
+
+```bash
+python3 tools/mono_calib.py --frames 3 --write --save-asset mycat \
+        --matte-model models/u2netp.rknn --species animal
+python3 tools/finalize_asset.py assets/mycat --species animal   # 只打印"跳过"
+```
+
+**还差一步**：还没有一张真实的猫/狗照片做观感验证（板子上没有素材）。
+拿到一张（正脸、0.8–1.5 m、背景别太乱）就能跑完整链路。
+
+**已知限制**：U²-Netp 的边缘比 MODNet 硬（发丝/胡须会略"切"），
+且没有眼睛坐标 → 不眨眼、不回望、没有眼神微动。
+

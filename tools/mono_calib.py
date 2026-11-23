@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.join(_REHAB, "vision"))
 sys.path.insert(0, _REHAB)          # pose_rknn 多目标时会 import core.*
 
 from capture.camera_io import StereoCamera                       # noqa: E402
-from capture.matte import PortraitMatte                          # noqa: E402
+from capture.matte import load_matte                             # noqa: E402
 from capture.mono_depth import MonocularDepth                    # noqa: E402
 from capture.pipeline import (MIN_DISPARITY, NUM_DISPARITIES,     # noqa: E402
                               evaluate, fit_affine, process_frame,
@@ -53,6 +53,10 @@ def main() -> int:
     ap.add_argument("--frames", type=int, default=4)
     ap.add_argument("--write", action="store_true", help="写入标定配置")
     ap.add_argument("--save-asset", default=None, help="同时存成渲染资产")
+    ap.add_argument("--matte-model", default=None,
+                    help="抠图模型：modnet.rknn（人像）或 u2netp.rknn（通用/动物）")
+    ap.add_argument("--species", default="human", choices=["human", "animal"],
+                    help="受采者物种；animal 时跳过瞳距守卫")
     a = ap.parse_args()
 
     if not os.path.isfile(DA_MODEL):
@@ -107,7 +111,8 @@ def main() -> int:
     # 实测教训：办公室空场景（背景同事在 2~5 m）也能过"内点 / 近距样本"两个
     # 门槛——内点 76.5%、1-2m 段 6946 个样本——于是把 R²=0.79 的好标定覆盖成了
     # R²=0.69。所以必须直测受采者，与 finalize_asset.py 用同一套判定。
-    if a.write or a.save_asset:
+    # 动物模式（--species animal）跳过这条：姿态模型只认人。
+    if (a.write or a.save_asset) and a.species == "human":
         from capture.landmarks import detect_main_person, eye_pair
         from capture.quiet import silence_stdout
         from pose_rknn import RknnPoseBackend
@@ -159,7 +164,7 @@ def main() -> int:
         print(f"\n✓ 标定已写入 {OUT_CFG}")
 
     if a.save_asset:
-        matte_net = PortraitMatte(MATTE_MODEL)
+        matte_net = load_matte(a.matte_model or MATTE_MODEL)
         matte = matte_net.infer(best["rgb"])
         matte_net.close()
         out = os.path.join(ROOT, "assets", a.save_asset)

@@ -33,7 +33,15 @@ POSE_MODEL = os.path.expanduser("~/rehab-coach/models/yolov8n-pose.rknn")
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("asset_dir")
+    ap.add_argument("--species", default="human", choices=["human", "animal"],
+                    help="animal 时跳过眨眼/头部遮罩（姿态模型只认人）")
     a = ap.parse_args()
+
+    if a.species == "animal":
+        # 动物没有可用的关键点模型：不生成 blink/head。渲染端本来就支持
+        # hasBlink/hasHead 为假时降级（不眨眼、不回望），视差照常。
+        print("动物模式：跳过眨眼与头部遮罩，资产保持 5 个文件")
+        return 0
 
     img = cv2.imread(os.path.join(a.asset_dir, "rgb.png"))
     if img is None:
