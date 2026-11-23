@@ -90,7 +90,17 @@ def main() -> int:
             print(f"    {b['range']:>9} m  {b['n']:6d}  "
                   f"{b['median_abs_mm']:7.0f} mm  {b['median_rel'] * 100:5.1f}%")
 
-    if a.write:
+    # 质量守卫：空场景/没人时会拟合出很差的标定（实测 R² 0.44），
+    # 直接写进去会污染后续所有资产。要求足够内点 + 近距段有足量样本。
+    near_n = sum(b["n"] for b in m["bands"]
+                 if "note" not in b and b["range"].split("-")[0] in ("0.5", "1"))
+    quality_ok = inl.mean() > 0.55 and near_n > 5000
+    if a.write and not quality_ok:
+        print(f"\n✗ 标定质量不足，跳过写入（内点 {inl.mean()*100:.1f}% 需>55%，"
+              f"0.5-2m 样本 {near_n} 需>5000）")
+        print("  多半是镜头前没人或站得太远，请站到 1.2~1.5m 处重试")
+
+    if a.write and quality_ok:
         cfg = {
             "method": "stereo_to_mono_affine",
             "calibrated_on": time.strftime("%Y-%m-%d"),
