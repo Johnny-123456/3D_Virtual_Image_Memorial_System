@@ -23,23 +23,10 @@ sys.path.insert(0, os.path.join(_REHAB, "vision"))
 sys.path.insert(0, _REHAB)
 
 from capture.blink import make_blink                       # noqa: E402
+from capture.headmask import make_head_mask                # noqa: E402
 from capture.landmarks import detect_main_person, eye_pair  # noqa: E402
 
 POSE_MODEL = os.path.expanduser("~/rehab-coach/models/yolov8n-pose.rknn")
-
-
-def make_head_mask(shape, eye_mid, iod, matte=None):
-    """头部椭圆遮罩（与 tools/make_headmask.py 同一套公式）。"""
-    h, w = shape
-    cx, cy = eye_mid
-    cy -= 0.55 * iod
-    rx, ry = 1.40 * iod, 1.80 * iod
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-    d = ((xx - cx) / max(rx, 1e-3)) ** 2 + ((yy - cy) / max(ry, 1e-3)) ** 2
-    m = np.clip(1.0 - d, 0.0, 1.0) ** 0.45
-    if matte is not None:
-        m *= np.clip(matte, 0, 1)
-    return m.astype(np.float32)
 
 
 def main() -> int:
@@ -57,7 +44,9 @@ def main() -> int:
         matte = cv2.imread(mp, cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255.0
 
     from pose_rknn import RknnPoseBackend
-    pose = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
+    from capture.quiet import silence_stdout
+    with silence_stdout():
+        pose = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
     det = detect_main_person(pose, img)
     pose.release()
 

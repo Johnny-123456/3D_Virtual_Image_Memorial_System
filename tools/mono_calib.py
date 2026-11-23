@@ -6,6 +6,13 @@
 
 拟合  1/Z = a · rel + b      （rel 为 DA 原始输出，越大越近）
 
+退出码
+------
+    0  正常（纯评测，或标定与资产都写成功）
+    1  采集/模型失败
+    3  受采者不在 1.2~1.5m（没检测到人 / 瞳距 < 45px）：未写标定、未出资产
+    4  标定质量不足：未写标定、未出资产
+
 用法
 ----
     python3 tools/mono_calib.py --frames 4 --write --save-asset portrait
@@ -21,6 +28,9 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REHAB = os.path.expanduser("~/rehab-coach/src/backend")
+sys.path.insert(0, os.path.join(_REHAB, "vision"))
+sys.path.insert(0, _REHAB)          # pose_rknn 多目标时会 import core.*
 
 from capture.camera_io import StereoCamera                       # noqa: E402
 from capture.matte import PortraitMatte                          # noqa: E402
@@ -34,6 +44,7 @@ from capture.sgbm_truth import SGBMTruth                         # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DA_MODEL = os.path.join(ROOT, "models", "depth_anything_v2_small.rknn")
 MATTE_MODEL = os.path.join(ROOT, "models", "modnet.rknn")
+POSE_MODEL = os.path.expanduser("~/rehab-coach/models/yolov8n-pose.rknn")
 OUT_CFG = os.path.join(ROOT, "config", "mono_depth_calib.json")
 
 
@@ -90,17 +101,48 @@ def main() -> int:
             print(f"    {b['range']:>9} m  {b['n']:6d}  "
                   f"{b['median_abs_mm']:7.0f} mm  {b['median_rel'] * 100:5.1f}%")
 
-    # 质量守卫：空场景/没人时会拟合出很差的标定（实测 R² 0.44），
-    # 直接写进去会污染后续所有资产。要求足够内点 + 近距段有足量样本。
+    best = max(samples, key=lambda s: s["valid_ratio"])
+
+    # 守卫 1：受采者在不在肖像距离上。
+    # 实测教训：办公室空场景（背景同事在 2~5 m）也能过"内点 / 近距样本"两个
+    # 门槛——内点 76.5%、1-2m 段 6946 个样本——于是把 R²=0.79 的好标定覆盖成了
+    # R²=0.69。所以必须直测受采者，与 finalize_asset.py 用同一套判定。
+    if a.write or a.save_asset:
+        from capture.landmarks import detect_main_person, eye_pair
+        from capture.quiet import silence_stdout
+        from pose_rknn import RknnPoseBackend
+        with silence_stdout():
+            pose = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
+        pair = eye_pair(detect_main_person(pose, best["rgb"]))
+        pose.release()
+        if not pair:
+            print("\n✗ 画面中央没检测到人，未写标定、未出资产")
+            print("  请站到镜头前 1.2~1.5m 处、位于画面中央后重试")
+            mono.close()
+            return 3
+        _le, _re, iod, _mid = pair
+        print(f"\n  受采者瞳距 {iod:.1f}px")
+        if iod < 45.0:
+            print(f"✗ 受采者离得太远（瞳距 {iod:.1f}px，至少 45px），"
+                  "未写标定、未出资产")
+            print("  请站到镜头前 1.2~1.5m 处后重试")
+            mono.close()
+            return 3
+
+    # 守卫 2：标定质量。要求足够内点 + 近距段有足量样本。
+    # 不达标时**既不写标定，也不许出资产**——用烂系数出的资产深度整体错乱，
+    # 比没有更糟（界面上看起来是好的，实际是一张废图）。
     near_n = sum(b["n"] for b in m["bands"]
                  if "note" not in b and b["range"].split("-")[0] in ("0.5", "1"))
-    quality_ok = inl.mean() > 0.55 and near_n > 5000
-    if a.write and not quality_ok:
-        print(f"\n✗ 标定质量不足，跳过写入（内点 {inl.mean()*100:.1f}% 需>55%，"
+    if inl.mean() <= 0.55 or near_n <= 5000:
+        print(f"\n✗ 标定质量不足（内点 {inl.mean()*100:.1f}% 需>55%，"
               f"0.5-2m 样本 {near_n} 需>5000）")
         print("  多半是镜头前没人或站得太远，请站到 1.2~1.5m 处重试")
+        if a.write or a.save_asset:
+            mono.close()
+            return 4
 
-    if a.write and quality_ok:
+    if a.write:
         cfg = {
             "method": "stereo_to_mono_affine",
             "calibrated_on": time.strftime("%Y-%m-%d"),
@@ -117,7 +159,6 @@ def main() -> int:
         print(f"\n✓ 标定已写入 {OUT_CFG}")
 
     if a.save_asset:
-        best = max(samples, key=lambda s: s["valid_ratio"])
         matte_net = PortraitMatte(MATTE_MODEL)
         matte = matte_net.infer(best["rgb"])
         matte_net.close()

@@ -241,9 +241,12 @@ public:
         m_preview = new QProcess(this);
         m_preview->setProcessChannelMode(QProcess::MergedChannels);
         m_capture = new QProcess(this);
-        m_capture->setProcessChannelMode(QProcess::MergedChannels);
+        // RKNN 运行时每帧都往 stderr 刷 I/W 日志，合并通道会把真正的结果埋掉。
+        // 所以只把 stdout 接进日志，stderr 留着失败时取尾巴（traceback）。
+        m_capture->setProcessChannelMode(QProcess::SeparateChannels);
         connect(m_capture, &QProcess::readyRead, this, [this] {
-            const QString s = QString::fromUtf8(m_capture->readAll());
+            const QString s = QString::fromUtf8(m_capture->readAllStandardOutput());
+            if (s.isEmpty()) return;
             m_log->moveCursor(QTextCursor::End);
             m_log->insertPlainText(s);
             m_log->moveCursor(QTextCursor::End);
@@ -262,6 +265,13 @@ public:
             "提示：站到画面中央，面向光源，不要背光。采集会自动标定尺度并生成完整资产。"));
         m_go->setEnabled(true);
         startPreview();
+    }
+
+    /// kiosk / 自动化测试：指定名字后直接开始采集（--auto-start 用）
+    void autoStart(const QString &name)
+    {
+        m_name->setText(name);
+        QTimer::singleShot(600, this, &CapturePage::startCapture);
     }
 
 signals:
@@ -304,7 +314,16 @@ private:
     void startCapture()
     {
         const QString name = m_name->text().trimmed();
-        if (name.isEmpty()) return;
+        if (name.isEmpty()) {
+            m_log->append(QString::fromUtf8("✗ 先给这个影像起个名字"));
+            return;
+        }
+        // 采集失败时会把这次新建的目录整个删掉（见 abortCapture）。若允许覆盖
+        // 同名资产，一次失败的采集就会顺手删掉用户原来的影像，所以先挡住。
+        if (QFileInfo::exists(g_root + "/assets/" + name)) {
+            m_log->append(QString::fromUtf8("✗ 资产「%1」已存在，换个名字再采集").arg(name));
+            return;
+        }
         stopPreview();                      // 采集脚本要独占相机
         m_go->setEnabled(false);
         m_log->clear();
@@ -317,15 +336,38 @@ private:
         m_capture->start("python3", args);
     }
 
+    /// 采集判定失败：丢弃本次写出的半个资产，把相机交还预览让用户重试。
+    /// 目录是本次新建的（startCapture 已挡掉同名），删掉不会误伤旧资产。
+    void abortCapture(const QString &why)
+    {
+        const QString dir = g_root + "/assets/" + m_pendingName;
+        if (QFileInfo::exists(dir))
+            QDir(dir).removeRecursively();
+
+        m_log->append(QString::fromUtf8("\n✗ %1").arg(why));
+        // stderr 只取最后几行：前面是 RKNN 加载噪音，有用的是 traceback 尾巴
+        const QStringList err = QString::fromUtf8(m_capture->readAllStandardError())
+                                    .split('\n', Qt::SkipEmptyParts);
+        if (!err.isEmpty())
+            m_log->append(QString::fromUtf8("  %1").arg(err.mid(qMax(0, err.size() - 6)).join('\n')));
+        m_log->append(QString::fromUtf8("  本次采集已丢弃，请重新采集。"));
+
+        m_hint->setText(QString::fromUtf8("✗ %1 —— 请重新采集").arg(why));
+        m_stage = 0;
+        m_go->setEnabled(true);
+        startPreview();
+    }
+
     void onCaptureDone(int code, QProcess::ExitStatus)
     {
         // 两段式：1 = 采集+标定，2 = 后处理（眨眼/头部遮罩）
         if (m_stage == 1) {
             if (code != 0) {
-                m_log->append(QString::fromUtf8("\n✗ 采集失败（退出码 %1）").arg(code));
-                m_stage = 0;
-                m_go->setEnabled(true);
-                startPreview();
+                abortCapture(code == 3
+                    ? QString::fromUtf8("受采者不在 1.2~1.5 m（没检测到人，或瞳距 < 45 px）")
+                    : (code == 4
+                       ? QString::fromUtf8("标定质量不足（内点或近距样本不够），未生成资产")
+                       : QString::fromUtf8("采集失败（退出码 %1）").arg(code)));
                 return;
             }
             m_log->append(QString::fromUtf8("\n>>> 生成眨眼与头部遮罩…\n"));
@@ -335,8 +377,19 @@ private:
             return;
         }
         if (m_stage == 2) {
-            m_log->append(code == 0 ? QString::fromUtf8("\n✓ 完成")
-                                    : QString::fromUtf8("\n！后处理有告警，资产仍可渲染"));
+            if (code != 0) {
+                // 3 = 瞳距守卫（离得太远/不在画面中央），2 = 没检测到双眼。
+                // 以前这里只写"后处理有告警，资产仍可渲染"，于是废资产照样进首页、
+                // 还直接跳进观看页——守卫等于白加。
+                abortCapture(code == 3
+                    ? QString::fromUtf8("受采者离得太远或不在画面中央（瞳距 < 45 px），"
+                                        "眨眼与头部遮罩未生成")
+                    : (code == 2
+                       ? QString::fromUtf8("没检测到双眼，眨眼与头部遮罩未生成")
+                       : QString::fromUtf8("后处理失败（退出码 %1）").arg(code)));
+                return;
+            }
+            m_log->append(QString::fromUtf8("\n✓ 完成：rgb/depth/matte/bg/blink/head/meta 已齐"));
             m_stage = 0;
             emit finished(m_pendingName);
         }
@@ -582,6 +635,13 @@ public:
     /// 直接进入某个页面（kiosk 启动 / 自动化测试用）
     void goHome() { m_home->refresh(); m_stack->setCurrentWidget(m_home); }
     void goCapture() { m_cap->enter(); m_stack->setCurrentWidget(m_cap); }
+    /// kiosk / 自动化测试：进采集页并立刻开始（--capture --auto-start <名字>）
+    void autoStartCapture(const QString &name)
+    {
+        m_cap->enter();
+        m_stack->setCurrentWidget(m_cap);
+        m_cap->autoStart(name);
+    }
     void goStage(const QString &dir, const QString &name)
     {
         m_stage->open(dir, name);
@@ -615,7 +675,10 @@ int main(int argc, char **argv)
         QString dir = a.startsWith("/") ? a : (g_root + "/assets/" + a);
         w.goStage(dir, QFileInfo(dir).fileName());
     } else if (args.contains("--capture")) {
-        w.goCapture();
+        // --capture --auto-start <名字>：kiosk / 自动化测试用，进页后自动开拍
+        const int ni = args.indexOf("--auto-start");
+        if (ni >= 0 && ni + 1 < args.size()) w.autoStartCapture(args[ni + 1]);
+        else w.goCapture();
     }
     return app.exec();
 }

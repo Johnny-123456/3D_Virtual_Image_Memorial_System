@@ -20,6 +20,13 @@
 用法
 ----
     python3 tools/capture_wizard.py --asset portrait
+
+退出码
+------
+    0  正常
+    1  采集/模型失败
+    3  受采者不在 1.2~1.5m（没检测到人 / 瞳距 < 45px）：未出资产
+    4  标定质量不足：未出资产
 """
 from __future__ import annotations
 
@@ -198,13 +205,15 @@ def main() -> int:
             return 1
 
     from pose_rknn import RknnPoseBackend
+    from capture.quiet import silence_stdout
     from capture.mono_depth import MonocularDepth
     from capture.matte import PortraitMatte
     from capture.rectify import Rectifier
     from capture.sgbm_truth import SGBMTruth
 
     print("[1/3] 加载姿态模型 ...", flush=True)
-    pose = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
+    with silence_stdout():
+        pose = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
     cap = open_camera()
     state = {"auto": False, "good_since": None, "countdown": None}
 
@@ -310,29 +319,52 @@ def main() -> int:
 
     best = max(samples, key=lambda s: s["valid_ratio"])
     out_dir = os.path.join(ROOT, "assets", a.asset)
+
+    # 守卫 1：标定质量。空场景/站太远会拟合出烂系数（实测 R² 0.44），
+    # 拿它出资产等于批量生产深度整体错乱的废图。
+    near_n = sum(b["n"] for b in metrics["bands"]
+                 if "note" not in b and b["range"].split("-")[0] in ("0.5", "1"))
+    if inl.mean() <= 0.55 or near_n <= 5000:
+        mono.close()
+        matte_net.close()
+        print(f"\n✗ 标定质量不足（内点 {inl.mean() * 100:.1f}% 需>55%，"
+              f"0.5-2m 样本 {near_n} 需>5000）")
+        print("  多半是镜头前没人或站得太远，请站到 1.2~1.5m 处重试")
+        return 4
+
+    # 守卫 2：受采者在不在。姿态模型在空场景里会选中背景中的远景目标
+    # （实测瞳距 2.8px 也照常出资产，head.png 覆盖 0%，渲染完全无效）。
+    from capture.landmarks import detect_main_person, eye_pair
+    with silence_stdout():
+        pb = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
+    pair = eye_pair(detect_main_person(pb, best["rgb"]))
+    pb.release()
+    if not pair or pair[2] < 45.0:      # <45px ≈ 3m 以外，不是受采者
+        mono.close()
+        matte_net.close()
+        print("\n✗ 受采者离得太远或不在画面中央（瞳距不足 45px），未生成资产")
+        print("  请站到镜头前 1.2~1.5m 处、位于画面中央后重试")
+        return 3
+    le, re_, inter, mid = pair
+    print(f"\n瞳距 {inter:.1f}px   中点 ({mid[0]:.0f},{mid[1]:.0f})")
+
     matte = matte_net.infer(best["rgb"])
     meta = write_asset(out_dir, best["rgb"], best["rel_full"], A, B, matte=matte)
     depth = 1.0 / np.clip(A * best["rel_full"] + B, 1e-4, None)
     write_background(out_dir, best["rgb"], depth.astype(np.float32),
                      meta["z_split"], matte)
-    # 眨眼贴图：用姿态模型定位双眼后合成
-    try:
-        from capture.blink import make_blink
-        pb = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
-        det2 = pb.detect(best["rgb"])
-        pb.release()
-        kp2 = det2["keypoints_2d"] if det2 else {}
-        if "left_eye" in kp2 and "right_eye" in kp2:
-            le, re_ = kp2["left_eye"], kp2["right_eye"]
-            inter = float(np.hypot(le["x"] - re_["x"], le["y"] - re_["y"]))
-            bl = make_blink(best["rgb"], [(le["x"], le["y"]), (re_["x"], re_["y"])],
-                            inter)
-            cv2.imwrite(os.path.join(out_dir, "blink.png"), bl)
-            print(f"  眨眼贴图已生成（瞳距 {inter:.0f}px）")
-        else:
-            print("  未检测到双眼，跳过眨眼贴图")
-    except Exception as e:
-        print("  眨眼贴图生成失败（不影响主流程）:", e)
+
+    # blink + head：与 tools/finalize_asset.py 同一套公式（共用 capture/ 里的模块）
+    from capture.blink import make_blink
+    from capture.headmask import make_head_mask
+    cv2.imwrite(os.path.join(out_dir, "blink.png"),
+                make_blink(best["rgb"], [(le["x"], le["y"]), (re_["x"], re_["y"])],
+                           inter))
+    print("  blink.png")
+    head = make_head_mask(best["rgb"].shape[:2], mid, inter, matte)
+    cv2.imwrite(os.path.join(out_dir, "head.png"),
+                (head * 255).round().astype(np.uint8))
+    print(f"  head.png（覆盖 {float((head > 0.5).mean()) * 100:.1f}%）")
 
     mono.close()
     matte_net.close()
