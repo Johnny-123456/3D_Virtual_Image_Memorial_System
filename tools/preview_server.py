@@ -67,7 +67,13 @@ def main() -> int:
             break
         left = frame[:, :1280]
         small = cv2.resize(left, (a.width, h), interpolation=cv2.INTER_AREA)
-        cv2.imwrite(tmp, small, [cv2.IMWRITE_JPEG_QUALITY, 78])
+        # 不能用 cv2.imwrite(tmp)：它靠文件名后缀推断编码器，".tmp" 会直接抛
+        # "could not find a writer for the specified extension"，预览一直是黑的。
+        ok2, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 78])
+        if not ok2:
+            continue
+        with open(tmp, "wb") as f:
+            f.write(buf.tobytes())
         os.replace(tmp, a.out)          # 原子替换，避免 Qt 读到半个文件
         dt = time.time() - t0
         if dt < period:

@@ -28,14 +28,17 @@ class PortraitMatte:
     """MODNet 人像抠图（RK3588 NPU）。"""
 
     def __init__(self, model_path: str, size: int = MODEL_SIZE) -> None:
-        from rknnlite.api import RKNNLite
+        from .quiet import silence_stdout
 
         self.size = size
-        self._rk = RKNNLite()
-        if self._rk.load_rknn(model_path) != 0:
-            raise RuntimeError(f"加载失败: {model_path}")
-        if self._rk.init_runtime() != 0:
-            raise RuntimeError("init_runtime 失败")
+        # 见 capture/mono_depth.py：librknnrt 在加载时缓存 fd 1，必须连 import 一起静音
+        with silence_stdout():
+            from rknnlite.api import RKNNLite
+            self._rk = RKNNLite()
+            if self._rk.load_rknn(model_path) != 0:
+                raise RuntimeError(f"加载失败: {model_path}")
+            if self._rk.init_runtime() != 0:
+                raise RuntimeError("init_runtime 失败")
 
     def close(self) -> None:
         try:

@@ -27,15 +27,19 @@ class MonocularDepth:
     """DepthAnything-V2-Small 推理封装（RK3588 NPU）。"""
 
     def __init__(self, model_path: str, size: int = MODEL_SIZE) -> None:
-        from rknnlite.api import RKNNLite
+        from .quiet import silence_stdout
 
         self.size = size
         self.model_path = model_path
-        self._rk = RKNNLite()
-        if self._rk.load_rknn(model_path) != 0:
-            raise RuntimeError(f"加载失败: {model_path}")
-        if self._rk.init_runtime() != 0:
-            raise RuntimeError("init_runtime 失败")
+        # librknnrt 在**加载时**就把 fd 1 存了一份，之后再 dup2 已经晚了；
+        # 所以连 import 一起放进静音区，横幅才会真的消失。
+        with silence_stdout():
+            from rknnlite.api import RKNNLite
+            self._rk = RKNNLite()
+            if self._rk.load_rknn(model_path) != 0:
+                raise RuntimeError(f"加载失败: {model_path}")
+            if self._rk.init_runtime() != 0:
+                raise RuntimeError("init_runtime 失败")
 
     def close(self) -> None:
         try:
