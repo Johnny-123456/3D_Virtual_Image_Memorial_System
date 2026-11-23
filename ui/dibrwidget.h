@@ -64,6 +64,8 @@ protected:
 private:
     void buildMesh();
     void drawPass(float gainScale, int pass);
+    /// 只重建纹理（换资产时用）；着色器/网格只初始化一次
+    void uploadTextures();
 
     bool m_ok = false;
     bool m_gl = false;

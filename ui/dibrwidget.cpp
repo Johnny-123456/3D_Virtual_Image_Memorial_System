@@ -41,9 +41,15 @@ void main() {
     vec2 pos = aPos + disp;
 
     // 眼神回望：头部区域额外朝观众方向偏移。
-    // 视差让头随观众反向滑动（像窗外的物体），这里反向补回来，
-    // 净效果是"头转过来看你"。强度由 uGaze 平滑控制。
+    // 关键：位移必须在头部内部**均匀**。head.png 是个边缘柔和衰减的椭圆，
+    // 直接乘 hm 会让脸的各处走不同距离 = 剪切，脸越转越歪（实测反馈"转的时候
+    // 脸是扭曲的"）。这里用窄过渡的 smoothstep 把椭圆压成"平台 + 羽化边"，
+    // 脸内部整体刚性平移，只有轮廓边缘过渡。
     if (uGaze > 0.001) {
+        // 回望只做"轻微前倾"：head.png 是边缘柔和衰减的椭圆，位移按它加权
+        // → 脸内部不同位置走不同距离。幅度一大（旧值 20 px/eye）就是剪切，
+        // 脸越转越歪。实测结论：单张照片 + 2.5D 网格**做不出真正的转头**，
+        // 那是 LivePortrait 那种神经重演的事；这里只保留一个很小的前倾暗示。
         float hm = texture2D(uHeadMask, aUV).r;
         pos += vec2(uEyeX, uEyeY) * uGaze * uGazeGain * hm;
     }
@@ -326,14 +332,12 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
 
     m_ok = true;
     if (m_gl) {
+        // 只重建纹理。**不能**再调 initializeGL()：那会往已经链接好的
+        // QOpenGLShaderProgram 里再加一份顶点/片元着色器，链接报
+        // "function `main' is multiply defined"，整个程序失效 ——
+        // 表现就是"看第二个素材时黑屏"（实测复现）。
         makeCurrent();
-        if (m_texColor) {
-            glDeleteTextures(1, &m_texColor);
-            glDeleteTextures(1, &m_texDepth);
-            glDeleteTextures(1, &m_texBlur);
-        }
-        m_texColor = m_texDepth = m_texBlur = 0;
-        initializeGL();
+        uploadTextures();
         doneCurrent();
     }
     update();
@@ -344,17 +348,37 @@ void DibrWidget::initializeGL()
 {
     initializeOpenGLFunctions();
     m_gl = true;
-    if (!m_ok) return;
 
-    if (!m_prog.addShaderFromSourceCode(QOpenGLShader::Vertex, kVert))
-        qWarning() << "VS:" << m_prog.log();
-    if (!m_prog.addShaderFromSourceCode(QOpenGLShader::Fragment, kFrag))
-        qWarning() << "FS:" << m_prog.log();
-    m_prog.bindAttributeLocation("aPos", 0);
-    m_prog.bindAttributeLocation("aUV", 1);
-    if (!m_prog.link()) qWarning() << "link:" << m_prog.log();
+    // 着色器和网格只建一次。注意这里**不能**依赖 m_ok：观看页是先 show 再
+    // loadAsset，首次 initializeGL 时还没有资产；以前 `if (!m_ok) return;`
+    // 会让程序永远没链接着色器。
+    if (!m_prog.isLinked()) {
+        if (!m_prog.addShaderFromSourceCode(QOpenGLShader::Vertex, kVert))
+            qWarning() << "VS:" << m_prog.log();
+        if (!m_prog.addShaderFromSourceCode(QOpenGLShader::Fragment, kFrag))
+            qWarning() << "FS:" << m_prog.log();
+        m_prog.bindAttributeLocation("aPos", 0);
+        m_prog.bindAttributeLocation("aUV", 1);
+        if (!m_prog.link()) qWarning() << "link:" << m_prog.log();
+    }
+    if (!m_vao.isCreated()) buildMesh();
 
-    buildMesh();
+    uploadTextures();
+}
+
+void DibrWidget::uploadTextures()
+{
+    if (!m_gl || !m_ok) return;
+
+    GLuint old[6] = {m_texColor, m_texDepth, m_texBlur,
+                     m_texMatte, m_texHead, m_texBlink};
+    GLuint oldGlow = m_texGlow;
+    m_texColor = m_texDepth = m_texBlur = 0;
+    m_texMatte = m_texHead = m_texBlink = m_texGlow = 0;
+
+    for (int i = 0; i < 6; ++i)
+        if (old[i]) glDeleteTextures(1, &old[i]);
+    if (oldGlow) glDeleteTextures(1, &oldGlow);
 
     glGenTextures(1, &m_texColor);
     glBindTexture(GL_TEXTURE_2D, m_texColor);
@@ -546,7 +570,7 @@ void DibrWidget::paintGL()
         m_prog.setUniformValue("uHeadMask", 6);
     }
     m_prog.setUniformValue("uGaze", m_hasHead ? m_gaze : 0.0f);
-    m_prog.setUniformValue("uGazeGain", 20.0f);
+    m_prog.setUniformValue("uGazeGain", 5.0f);
     m_prog.setUniformValue("uHasBlink", m_hasBlink ? 1 : 0);
     m_prog.setUniformValue("uBlink", m_blink);
     m_prog.setUniformValue("uGhostAlpha", m_ghostAlpha);

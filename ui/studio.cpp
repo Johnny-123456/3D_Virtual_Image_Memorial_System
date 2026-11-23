@@ -24,6 +24,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStackedWidget>
+#include <QSurfaceFormat>
 #include <QTextEdit>
 #include <QTimer>
 #include <QToolButton>
@@ -657,6 +658,10 @@ private:
 
 int main(int argc, char **argv)
 {
+    // 垂直同步：不锁的话画面在动的时候会出现水平撕裂（实测反馈）
+    QSurfaceFormat fmt;
+    fmt.setSwapInterval(1);
+    QSurfaceFormat::setDefaultFormat(fmt);
     QApplication app(argc, argv);
     QCoreApplication::setApplicationName("memorial-studio");
 
@@ -679,6 +684,21 @@ int main(int argc, char **argv)
         const int ni = args.indexOf("--auto-start");
         if (ni >= 0 && ni + 1 < args.size()) w.autoStartCapture(args[ni + 1]);
         else w.goCapture();
+    }
+
+    // --autoswitch a,b：自动走一遍"看 a → 返回 → 看 b"，用于复现切换素材
+    const int si = args.indexOf("--autoswitch");
+    if (si >= 0 && si + 1 < args.size()) {
+        const QStringList two = args[si + 1].split(',');
+        if (two.size() >= 2) {
+            QTimer::singleShot(1500, &w, [&w, two] {
+                w.goStage(g_root + "/assets/" + two[0], two[0]);
+            });
+            QTimer::singleShot(6000, &w, [&w] { w.goHome(); });
+            QTimer::singleShot(8000, &w, [&w, two] {
+                w.goStage(g_root + "/assets/" + two[1], two[1]);
+            });
+        }
     }
     return app.exec();
 }

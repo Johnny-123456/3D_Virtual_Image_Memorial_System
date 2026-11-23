@@ -3,6 +3,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QSurfaceFormat>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -220,6 +221,10 @@ private:
 
 int main(int argc, char **argv)
 {
+    // 垂直同步：不锁的话画面在动的时候会出现水平撕裂（实测反馈）
+    QSurfaceFormat fmt;
+    fmt.setSwapInterval(1);
+    QSurfaceFormat::setDefaultFormat(fmt);
     QApplication app(argc, argv);
     QCommandLineParser p;
     p.addHelpOption();
@@ -233,11 +238,26 @@ int main(int argc, char **argv)
     QCommandLineOption optStyle("look", "风格 0清晰/1回忆/2魂影", "i", "0");
     QCommandLineOption optBlink("blink", "快照时固定眨眼量 0..1", "v");
     QCommandLineOption optGaze("gaze", "快照时固定回望强度 0..1", "v");
+    QCommandLineOption optSecond("second", "先加载 --asset，再切换到该资产后快照"
+                                          "（复现观看页切换素材）", "dir");
     p.addOptions({optAsset, optSnap, optEye, optFull, optFocus, optGain,
-                  optPort, optStyle, optBlink, optGaze});
+                  optPort, optStyle, optBlink, optGaze, optSecond});
     p.process(app);
 
     Viewer v(p.value(optAsset), quint16(p.value(optPort).toUShort()));
+
+    if (p.isSet(optSecond)) {
+        // 复现"退出一个素材再点另一个"：先离开观看页（隐藏 → 再显示），
+        // 然后同一个 DibrWidget 再 loadAsset 第二个资产。
+        v.gl()->setVisible(false);
+        QCoreApplication::processEvents();
+        v.gl()->setVisible(true);
+        QCoreApplication::processEvents();
+        const QString d2 = p.value(optSecond);
+        QString err;
+        v.gl()->loadAsset(d2.startsWith("/") ? d2 : QString("../assets/") + d2, &err);
+        if (!err.isEmpty()) qWarning() << "第二次 loadAsset:" << err;
+    }
 
     if (p.isSet(optSnap)) {
         const QStringList xy = p.value(optEye).split(',');
