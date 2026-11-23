@@ -2,7 +2,9 @@
 """为已有资产生成背景板 bg.png：把主体抠掉并修补。
 
 DIBR 的鬼影来自"背景层里还留着主体"。用深度图把比 z_split 更近的区域
-挖掉再 inpaint，得到一张干净背景——渲染时背景层用它，主体移动就不再重影。
+挖掉再填补，得到一张干净背景——渲染时背景层用它，主体移动就不再重影。
+
+填洞算法与采集链路共用 `capture.pipeline.make_background`。
 
 用法：
     python3 tools/make_bg.py assets/portrait
@@ -16,25 +18,9 @@ import sys
 import cv2
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def make_background(rgb: np.ndarray, depth: np.ndarray, z_split: float,
-                    dilate: int = 9, matte: np.ndarray = None) -> np.ndarray:
-    """把主体区域挖掉并修补，返回背景图。
-
-    有 matte（人像 alpha）时优先用它——比深度阈值精确得多，
-    头发、肩膀这些深度和背景接近的地方也能正确挖除。
-    """
-    if matte is not None:
-        mask = (matte > 0.15).astype(np.uint8) * 255
-    else:
-        mask = ((depth > 0) & (depth < z_split)).astype(np.uint8) * 255
-    if mask.any():
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate, dilate))
-        mask = cv2.dilate(mask, k, iterations=2)
-        bg = cv2.inpaint(rgb, mask, 7, cv2.INPAINT_TELEA)
-    else:
-        bg = rgb.copy()
-    return bg
+from capture.pipeline import make_background  # noqa: E402
 
 
 def main() -> int:

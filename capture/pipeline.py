@@ -125,17 +125,62 @@ def write_asset(out_dir: str, rgb: np.ndarray, rel_full: np.ndarray,
     return meta
 
 
+def fill_holes(rgb: np.ndarray, mask: np.ndarray, levels: int = 7) -> np.ndarray:
+    """用周围像素把 mask 区域平滑外推填满（金字塔 push-pull）。
+
+    原先用 cv2.inpaint(INPAINT_TELEA)：主体占画面 1/4 时它会从掩码边缘
+    放射出巨大的白色楔形条纹（实测 bg.png 从头顶向四周射出大片白扇，
+    魂影半透明模式下直接露馅）。push-pull 只做由粗到细的加权外推，
+    没有方向性，低频平滑，也不会产生条纹。
+    """
+    img = rgb.astype(np.float32) / 255.0
+    w = (~mask).astype(np.float32)          # 1 = 有效像素
+    col = img * w[..., None]                # 预乘，避免无效像素参与平均
+    pyr = [(col, w)]
+    while min(col.shape[0], col.shape[1]) > 4 and len(pyr) < levels:
+        col = cv2.pyrDown(col)
+        w = cv2.pyrDown(w)
+        pyr.append((col, w))
+
+    col, w = pyr[-1]
+    for c_f, w_f in reversed(pyr[:-1]):
+        c_u = cv2.pyrUp(col, dstsize=(c_f.shape[1], c_f.shape[0]))
+        w_u = cv2.pyrUp(w, dstsize=(w_f.shape[1], w_f.shape[0]))
+        w_f = np.clip(w_f, 0.0, 1.0)
+        col = c_f + c_u * (1.0 - w_f)[..., None]
+        w = w_f + np.clip(w_u, 0.0, 1.0) * (1.0 - w_f)
+
+    out = col / np.maximum(w, 1e-4)[..., None]
+    return (np.clip(out, 0.0, 1.0) * 255.0).round().astype(np.uint8)
+
+
+def make_background(rgb: np.ndarray, depth: Optional[np.ndarray],
+                    z_split: float, matte: Optional[np.ndarray] = None,
+                    dilate: int = 9) -> np.ndarray:
+    """把主体区域挖掉并填补，返回干净背景板。"""
+    if matte is not None:
+        # 阈值取 0.02 而不是 0.15：MODNet 的软边（alpha 0.02~0.15）虽然视觉上
+        # 已是背景，但像素颜色仍混着人物。若拿它们当种子，外推会把黑毛衣的
+        # 颜色抹满整块背景，背景板上留下一团黑云（实测踩过）。
+        mask = matte > 0.02
+    elif depth is not None:
+        mask = (depth > 0) & (depth < z_split)
+    else:
+        return rgb.copy()
+    if not mask.any():
+        return rgb.copy()
+
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate, dilate))
+    m8 = cv2.dilate(mask.astype(np.uint8) * 255, k, iterations=2)
+    fill = fill_holes(rgb, m8 > 0).astype(np.float32)
+    # 边界羽化，避免抠图边在背景板上留一圈硬接缝
+    a = cv2.GaussianBlur(m8.astype(np.float32) / 255.0, (0, 0), 2.0)[..., None]
+    out = rgb.astype(np.float32) * (1.0 - a) + fill * a
+    return np.clip(out, 0, 255).round().astype(np.uint8)
+
+
 def write_background(out_dir: str, rgb: np.ndarray, depth: np.ndarray,
                      z_split: float, matte: Optional[np.ndarray]) -> None:
-    """生成背景板 bg.png（挖掉主体后 inpaint）。"""
-    if matte is not None:
-        mask = (matte > 0.15).astype(np.uint8) * 255
-    else:
-        mask = ((depth > 0) & (depth < z_split)).astype(np.uint8) * 255
-    if mask.any():
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-        mask = cv2.dilate(mask, k, iterations=2)
-        bg = cv2.inpaint(rgb, mask, 7, cv2.INPAINT_TELEA)
-    else:
-        bg = rgb.copy()
-    cv2.imwrite(os.path.join(out_dir, "bg.png"), bg)
+    """生成背景板 bg.png（挖掉主体后填补）。"""
+    cv2.imwrite(os.path.join(out_dir, "bg.png"),
+                make_background(rgb, depth, z_split, matte))
