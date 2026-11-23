@@ -77,12 +77,13 @@ private:
     QImage m_glow;
     QImage m_blinkImg;
     QImage m_headMask;
+    QImage m_eyeMask;               ///< 两眼小椭圆：眼神微动的作用区
     QVector<float> m_depth;
     float m_zFocus = 5.0f, m_zMin = 0.3f, m_zMax = 10.0f;
     float m_zSubject = 0.0f;        ///< meta 里的主体距离：主体层按刚性平面处理
     float m_split = 2.0f;
     float m_eyeX = 0.0f, m_eyeY = 0.0f;
-    float m_gain = 70.0f;
+    float m_gain = 75.0f;
     float m_ghostAlpha = 1.0f;   // 主体不透明度（魂影模式调低）
     float m_glowAmt = 0.35f;     // 边缘辉光强度
     float m_grade = 0.5f;        // 调色强度 0..1
@@ -95,8 +96,10 @@ private:
     QOpenGLBuffer m_ibo{QOpenGLBuffer::IndexBuffer};
     QOpenGLVertexArrayObject m_vao;
     GLuint m_texColor = 0, m_texDepth = 0, m_texBlur = 0,
-           m_texMatte = 0, m_texGlow = 0, m_texBlink = 0, m_texHead = 0;
+           m_texMatte = 0, m_texGlow = 0, m_texBlink = 0, m_texHead = 0,
+           m_texEye = 0;
     bool m_hasHead = false;
+    bool m_hasEyes = false;
     float m_gaze = 0.0f;         // 0..1 回望强度
     bool m_hasBlink = false;
     float m_blink = 0.0f;

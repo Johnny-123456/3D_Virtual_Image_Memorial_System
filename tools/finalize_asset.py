@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -74,6 +75,23 @@ def main() -> int:
     cv2.imwrite(os.path.join(a.asset_dir, "head.png"),
                 (m * 255).round().astype(np.uint8))
     print(f"  head.png（覆盖 {float((m > 0.5).mean()) * 100:.1f}%）")
+
+    # 把眼睛位置写进 meta.json：渲染端据此做"眼神微动"（在两眼小椭圆内
+    # 轻微挪动采样点，看起来是眼球在转）。
+    mp = os.path.join(a.asset_dir, "meta.json")
+    try:
+        with open(mp, encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["eyes"] = {
+            "left": [round(float(le["x"]), 1), round(float(le["y"]), 1)],
+            "right": [round(float(re_["x"]), 1), round(float(re_["y"]), 1)],
+            "iod": round(float(iod), 1),
+        }
+        with open(mp, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+        print("  meta.json 已记录眼睛位置")
+    except Exception as e:
+        print("  ⚠ 写入眼睛位置失败:", e)
     return 0
 
 

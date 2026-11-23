@@ -2,10 +2,16 @@
 
 #include <QDebug>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <cmath>
 #include <vector>
+
+// 掩码内的盒式模糊（积分图实现，O(1)/像素），定义见文件后半
+static void maskedBlur(std::vector<float> &d, int w, int h,
+                       const std::vector<uchar> &mask, int r);
 
 #ifndef GL_R32F
 #define GL_R32F 0x822E
@@ -40,19 +46,16 @@ void main() {
 
     vec2 pos = aPos + disp;
 
-    // 眼神回望：头部区域额外朝观众方向偏移。
-    // 关键：位移必须在头部内部**均匀**。head.png 是个边缘柔和衰减的椭圆，
-    // 直接乘 hm 会让脸的各处走不同距离 = 剪切，脸越转越歪（实测反馈"转的时候
-    // 脸是扭曲的"）。这里用窄过渡的 smoothstep 把椭圆压成"平台 + 羽化边"，
-    // 脸内部整体刚性平移，只有轮廓边缘过渡。
+    // 头部区域的两层微动，都按 head.png 加权：
+    //  1) 回望：轻微前倾。幅度必须小——head.png 是边缘柔和衰减的椭圆，位移按它
+    //     加权意味着脸内部不同位置走不同距离，幅度一大就是剪切，脸越转越歪。
+    //     真正的转头要靠神经重演（LivePortrait），2.5D 网格做不到。
+    //  2) 点头：极缓慢的上下浮动，幅度 1.8px、周期约 8.6 s，纯粹为了"别太死板"。
+    float hm = texture2D(uHeadMask, aUV).r;
     if (uGaze > 0.001) {
-        // 回望只做"轻微前倾"：head.png 是边缘柔和衰减的椭圆，位移按它加权
-        // → 脸内部不同位置走不同距离。幅度一大（旧值 20 px/eye）就是剪切，
-        // 脸越转越歪。实测结论：单张照片 + 2.5D 网格**做不出真正的转头**，
-        // 那是 LivePortrait 那种神经重演的事；这里只保留一个很小的前倾暗示。
-        float hm = texture2D(uHeadMask, aUV).r;
         pos += vec2(uEyeX, uEyeY) * uGaze * uGazeGain * hm;
     }
+    pos.y += 1.8 * sin(uTime * 0.73 + 1.7) * hm;
 
     // 呼吸：以画面中心为基准的极轻微纵向缩放 + 横向漂移
     pos.y *= 1.0 + 0.0026 * sin(uTime * 1.6);
@@ -79,6 +82,9 @@ uniform float uGhostAlpha;
 uniform float uGlowAmt;
 uniform float uGrade;
 uniform int uPass;
+uniform sampler2D uEyeMask;      // 两眼位置的小椭圆，做"眼神微动"
+uniform float uHasEye;
+uniform vec2 uEyeShift;          // UV 偏移（由 CPU 按像素换算好）
 
 varying vec2 vUV;
 
@@ -101,9 +107,16 @@ void main() {
         gl_FragColor = vec4(bg, 1.0);
 
     } else if (uPass == 1) {
-        vec3 c = texture2D(uTex, vUV).rgb;
+        // 眼神微动：只在两眼的小椭圆内把采样点挪一点点（1~2 px），
+        // 看上去是眼球在转动，而不是整张脸在动。
+        vec2 uv = vUV;
+        if (uHasEye > 0.5) {
+            float em = texture2D(uEyeMask, vUV).r;
+            uv += uEyeShift * em;
+        }
+        vec3 c = texture2D(uTex, uv).rgb;
         if (uHasBlink == 1 && uBlink > 0.001) {
-            vec3 c2 = texture2D(uTexBlink, vUV).rgb;
+            vec3 c2 = texture2D(uTexBlink, uv).rgb;
             c = mix(c, c2, uBlink);
         }
         c = grade(c) * vig;
@@ -260,6 +273,37 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
         m_hasHead = false;
     }
 
+    // 眼睛位置来自 meta.json（采集时 finalize_asset 写入）。有的话建两个小椭圆，
+    // 渲染端在椭圆内轻微挪动采样点 = 眼球在转，让画面不那么"死"。
+    m_hasEyes = false;
+    const QJsonObject eyes = meta.value("eyes").toObject();
+    if (eyes.contains("left") && eyes.contains("right")) {
+        const QJsonArray l = eyes.value("left").toArray();
+        const QJsonArray r = eyes.value("right").toArray();
+        if (l.size() == 2 && r.size() == 2) {
+            const float lx = float(l[0].toDouble()), ly = float(l[1].toDouble());
+            const float rx = float(r[0].toDouble()), ry = float(r[1].toDouble());
+            const float iod = float(std::hypot(rx - lx, ry - ly));
+            const float ex = qMax(4.0f, iod * 0.26f), ey = qMax(3.0f, iod * 0.17f);
+            QImage em(m_w, m_h, QImage::Format_Grayscale8);
+            em.fill(0);
+            for (int py = 0; py < m_h; ++py) {
+                uchar *row = em.scanLine(py);
+                for (int px = 0; px < m_w; ++px) {
+                    float v = 0.0f;
+                    for (const QPointF &c : {QPointF(lx, ly), QPointF(rx, ry)}) {
+                        const float dx = (px - c.x()) / ex, dy = (py - c.y()) / ey;
+                        const float d2 = dx * dx + dy * dy;
+                        if (d2 < 1.0f) v = qMax(v, 1.0f - d2);   // 软椭圆
+                    }
+                    row[px] = uchar(qBound(0.0f, v, 1.0f) * 255.0f);
+                }
+            }
+            m_eyeMask = em;
+            m_hasEyes = true;
+        }
+    }
+
     if (m_hasMatte) {
         // 辉光贴图 = matte 的高斯模糊版。必须全分辨率模糊：
         // 之前先缩到 1/12 再放大，blur(matte)-matte 的差值是 8-bit 量化台阶，
@@ -282,22 +326,29 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
     m_depth.resize(m_w * m_h);
     df.read(reinterpret_cast<char *>(m_depth.data()), need);
 
-    // 主体层当成"一块刚性平面"：matte 覆盖到的像素，深度统一成主体距离。
+    // 主体层深度后处理：保留"圆润的纵深"，但抹掉会把网格撕开的锐利台阶。
     //
-    // 为什么：单目深度在眉毛/发丝/肩线内部就有 20~30 cm 的抖动，位移一大，
-    // 同一张脸上不同部位走不同距离，边缘被拉出横向丝（实测 gain 250 / eye 0.5
-    // 时糊成一片扇形）。人像内部那点视差在 1.2~1.5 m 处根本看不出来，真正有用
-    // 的是"人整体相对背景平移"，所以把主体压平是净赚。
-    // 阈值取 6 而不是 128：matte 的软边（alpha 0.02~0.5）视觉上已是背景，但像素
-    // 颜色还混着人物，必须跟着主体一起走，否则会留下一圈"半透明残影"。
-    if (m_hasMatte && m_matte.width() == m_w && m_matte.height() == m_h
-        && m_zSubject > 0.05f) {
+    // 两难：完全压平（上一版做法）人像像一张贴纸；不处理又会因为眉骨/鼻梁/
+    // 头发之间的深度台阶，让同一张脸的不同部位走不同距离，位移一大就撕。
+    // 折中（Kopf 那套 LDI 的简化版）：matte 内部只保留低频起伏（大半径掩码盒式
+    // 模糊），边界处再做硬台阶——网格跨轮廓时两侧深度相同，拉伸落在不可见区域。
+    if (m_hasMatte && m_matte.width() == m_w && m_matte.height() == m_h) {
+        std::vector<uchar> mask(size_t(m_w) * m_h);
         for (int y = 0; y < m_h; ++y) {
             const uchar *sr = m_matte.constScanLine(y);
-            float *dr = m_depth.data() + size_t(y) * m_w;
             for (int x = 0; x < m_w; ++x)
-                if (sr[x] >= 6) dr[x] = m_zSubject;
+                mask[size_t(y) * m_w + x] = sr[x] >= 6 ? 1 : 0;
         }
+        std::vector<float> d(m_depth.begin(), m_depth.end());
+        maskedBlur(d, m_w, m_h, mask, qMax(6, m_w / 90));   // 半径≈14px@1272 宽
+
+        // 夹到主体距离附近，避免个别离群点把整块拖走
+        if (m_zSubject > 0.05f) {
+            const float lo = m_zSubject * 0.80f, hi = m_zSubject * 1.30f;
+            for (size_t i = 0; i < d.size(); ++i)
+                if (mask[i]) d[i] = qBound(lo, d[i], hi);
+        }
+        m_depth = QVector<float>(d.begin(), d.end());
     }
 
     // 再把这块平面的深度向 matte 外侧扩 8px：网格三角形跨轮廓时两侧顶点深度
@@ -344,6 +395,41 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
     return true;
 }
 
+// 掩码内的盒式模糊（积分图实现，O(1)/像素）。只对 mask=1 的像素取邻域均值，
+// 邻域里没有有效像素时保持原值。用来把主体深度压成"只有低频起伏"。
+static void maskedBlur(std::vector<float> &d, int w, int h,
+                       const std::vector<uchar> &mask, int r)
+{
+    if (w <= 0 || h <= 0 || r <= 0) return;
+    const size_t stride = size_t(w) + 1;
+    std::vector<double> si((size_t(w) + 1) * (h + 1), 0.0);
+    std::vector<double> sw((size_t(w) + 1) * (h + 1), 0.0);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const size_t i = size_t(y) * w + x;
+            const double m = mask[i] ? 1.0 : 0.0;
+            const size_t p = size_t(y + 1) * stride + (x + 1);
+            si[p] = si[p - 1] + si[p - stride] - si[p - stride - 1] + d[i] * m;
+            sw[p] = sw[p - 1] + sw[p - stride] - sw[p - stride - 1] + m;
+        }
+    }
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const size_t i = size_t(y) * w + x;
+            if (!mask[i]) continue;
+            const int x0 = qMax(0, x - r), x1 = qMin(w - 1, x + r);
+            const int y0 = qMax(0, y - r), y1 = qMin(h - 1, y + r);
+            const size_t a = size_t(y0) * stride + x0;
+            const size_t b = size_t(y0) * stride + (x1 + 1);
+            const size_t c = size_t(y1 + 1) * stride + x0;
+            const size_t e = size_t(y1 + 1) * stride + (x1 + 1);
+            const double s = si[e] - si[b] - si[c] + si[a];
+            const double cnt = sw[e] - sw[b] - sw[c] + sw[a];
+            if (cnt > 0.5) d[i] = float(s / cnt);
+        }
+    }
+}
+
 void DibrWidget::initializeGL()
 {
     initializeOpenGLFunctions();
@@ -370,13 +456,13 @@ void DibrWidget::uploadTextures()
 {
     if (!m_gl || !m_ok) return;
 
-    GLuint old[6] = {m_texColor, m_texDepth, m_texBlur,
-                     m_texMatte, m_texHead, m_texBlink};
+    GLuint old[7] = {m_texColor, m_texDepth, m_texBlur,
+                     m_texMatte, m_texHead, m_texBlink, m_texEye};
     GLuint oldGlow = m_texGlow;
     m_texColor = m_texDepth = m_texBlur = 0;
-    m_texMatte = m_texHead = m_texBlink = m_texGlow = 0;
+    m_texMatte = m_texHead = m_texBlink = m_texEye = m_texGlow = 0;
 
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 7; ++i)
         if (old[i]) glDeleteTextures(1, &old[i]);
     if (oldGlow) glDeleteTextures(1, &oldGlow);
 
@@ -445,6 +531,19 @@ void DibrWidget::uploadTextures()
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, m_w, m_h, 0, GL_RED,
                      GL_UNSIGNED_BYTE, m_glow.constBits());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    }
+
+    if (m_hasEyes && !m_eyeMask.isNull()) {
+        glGenTextures(1, &m_texEye);
+        glBindTexture(GL_TEXTURE_2D, m_texEye);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, m_w, m_h, 0, GL_RED,
+                     GL_UNSIGNED_BYTE, m_eyeMask.constBits());
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     }
 
@@ -569,6 +668,23 @@ void DibrWidget::paintGL()
         glBindTexture(GL_TEXTURE_2D, m_texHead);
         m_prog.setUniformValue("uHeadMask", 6);
     }
+    if (m_hasEyes && m_texEye) {
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, m_texEye);
+        m_prog.setUniformValue("uEyeMask", 7);
+        m_prog.setUniformValue("uHasEye", 1.0f);
+        // 眼神微动：两条不同频率的正弦叠加，避免看出周期；幅度 ~1.6px
+        const float t = m_time;
+        const float sx = 1.35f * std::sin(t * 0.41f + 0.7f)
+                       + 0.45f * std::sin(t * 1.37f + 2.1f);
+        const float sy = 0.75f * std::sin(t * 0.57f + 1.3f)
+                       + 0.25f * std::sin(t * 1.71f);
+        m_prog.setUniformValue("uEyeShift",
+                               QVector2D(sx / float(m_w), sy / float(m_h)));
+    } else {
+        m_prog.setUniformValue("uHasEye", 0.0f);
+        m_prog.setUniformValue("uEyeShift", QVector2D(0.0f, 0.0f));
+    }
     m_prog.setUniformValue("uGaze", m_hasHead ? m_gaze : 0.0f);
     m_prog.setUniformValue("uGazeGain", 5.0f);
     m_prog.setUniformValue("uHasBlink", m_hasBlink ? 1 : 0);
@@ -589,7 +705,7 @@ void DibrWidget::paintGL()
     m_prog.setUniformValue("uSplit", m_split);
 
     // 背景层：增益 0（不位移），保证铺满整屏不露黑边
-    drawPass(0.0f, 0);
+    drawPass(0.25f, 0);   // 背景也走一点视差：原来是 0，画面"太死板"
 
     // 前景层：全增益视差 + matte alpha
     glEnable(GL_BLEND);
