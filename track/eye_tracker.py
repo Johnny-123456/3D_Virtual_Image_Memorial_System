@@ -21,14 +21,17 @@
 
 输出协议
 --------
-UDP -> 127.0.0.1:9999，一行 ASCII：`ex,ey\\n`（各 -1..1）
+UDP -> 127.0.0.1:9999，一行 ASCII：`ex,ey\n`（各 -1..1）
 检测不到人时发送 `nan,nan`，渲染端据此保持上一次位置。
+加 `--stamp` 时末尾多一个抓帧时刻：`ex,ey,<epoch 秒>`，渲染端据此显示
+端到端延迟（老渲染端会忽略第三个字段，协议向后兼容）。
 
 用法
 ----
     python3 track/eye_tracker.py                 # 实时推流
     python3 track/eye_tracker.py --image a.png   # 离线验证一张图
     python3 track/eye_tracker.py --print         # 同时打印到终端
+    python3 track/eye_tracker.py --replay a.png --stamp   # 无人时测延迟
 """
 from __future__ import annotations
 
@@ -51,6 +54,8 @@ if _REHAB not in sys.path:
     sys.path.insert(0, _REHAB)
 if REHAB not in sys.path:
     sys.path.insert(0, REHAB)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 
 class EyeTracker:
@@ -70,8 +75,13 @@ class EyeTracker:
 
     def process(self, bgr: np.ndarray):
         """返回 (ex, ey, info)；检测失败返回 (None, None, info)。"""
+        from capture.landmarks import detect_main_person
+
         h, w = bgr.shape[:2]
-        det = self.pose.detect(bgr)
+        # 只在画面中央检测：直接整帧 detect 会被画面边缘的类人干扰抢走目标
+        # （实测：portrait3 那张图上，整帧检测把鼻尖定位到右上角挂着的夹克上，
+        #  x=1252 而真人鼻尖在 567）。与 finalize_asset / mono_calib 同一套判定。
+        det = detect_main_person(self.pose, bgr)
         if not det:
             return None, None, {"ms": 0.0, "conf": 0.0, "nose": None}
 
@@ -98,12 +108,15 @@ class EyeTracker:
         }
 
 
-def grab_left():
+def grab_left(buffers: int = 1):
     cap = cv2.VideoCapture(DEV, cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc("M", "J", "P", "G"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+    # 缓冲区深度 1 而不是 2：追踪器只要"最新一帧"，多一层缓冲就多 2~3 帧延迟。
+    # 实测（12fps 消费 31fps 流）：BUFFERSIZE=2 时读到的帧已经过期 214 ms，
+    # 改成 1 降到 98 ms —— 端到端延迟从 237 ms 降到 ~127 ms。
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, buffers)
     ok = False
     for _ in range(8):
         ok, f = cap.read()
@@ -119,6 +132,12 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=9999)
     ap.add_argument("--sens", type=float, default=1.0)
     ap.add_argument("--print", action="store_true")
+    ap.add_argument("--replay", default=None, metavar="IMG",
+                    help="循环回放一张图代替相机（无真人在场时测延迟用）")
+    ap.add_argument("--stamp", action="store_true",
+                    help="UDP 包末尾附带抓帧时刻（epoch 秒），供渲染端量端到端延迟")
+    ap.add_argument("--buffers", type=int, default=1,
+                    help="V4L2 缓冲深度（默认 1：追踪只要最新帧，越深延迟越大）")
     a = ap.parse_args()
 
     if not os.path.isfile(MODEL):
@@ -146,30 +165,53 @@ def main() -> int:
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     addr = ("127.0.0.1", a.port)
-    cap, left = grab_left()
-    print(f"追踪中 -> udp {addr[0]}:{addr[1]}   (Ctrl-C 退出)")
+
+    def payload(ex, ey, t_cap):
+        body = "nan,nan" if ex is None else ("%.4f,%.4f" % (ex, ey))
+        return (body + (",%.6f" % t_cap if a.stamp else "") + "\n").encode()
+
+    cap = None
+    if a.replay:
+        left = cv2.imread(a.replay)
+        if left is None:
+            print("读图失败:", a.replay)
+            tr.close()
+            return 1
+        print(f"回放 {a.replay} -> udp {addr[0]}:{addr[1]}   (Ctrl-C 退出)")
+    else:
+        cap, left = grab_left(a.buffers)
+        print(f"追踪中 -> udp {addr[0]}:{addr[1]}   (Ctrl-C 退出)")
+
     n = 0
     t0 = time.time()
+    frame_age = 0.0
     try:
         while True:
+            t_cap = time.time()
             ex, ey, info = tr.process(left)
-            if ex is None:
-                sock.sendto(b"nan,nan\n", addr)
-            else:
-                sock.sendto(("%.4f,%.4f\n" % (ex, ey)).encode(), addr)
+            sock.sendto(payload(ex, ey, t_cap), addr)
             n += 1
             if a.print and n % 15 == 0:
                 fps = n / max(time.time() - t0, 1e-6)
                 print(f"  {fps:4.1f} fps  ex={ex if ex is None else round(ex, 3)} "
-                      f"ey={ey if ey is None else round(ey, 3)}  infer {info['ms']}ms")
+                      f"ey={ey if ey is None else round(ey, 3)}  infer {info['ms']}ms"
+                      + ("" if cap is None else f"  帧龄 {frame_age:.0f}ms"), flush=True)
+            if a.replay:
+                left = cv2.imread(a.replay)      # 重新读，模拟下一帧
+                time.sleep(max(0.0, 0.033 - (time.time() - t_cap)))
+                continue
             ok, f = cap.read()
             if not ok:
                 break
+            # V4L2 的 POS_MSEC 是 monotonic 毫秒：读到时这一帧已经"过期"多少，
+            # 就是相机缓冲（BUFFERSIZE=2）引入的延迟，端到端要算进去。
+            frame_age = time.monotonic() * 1000.0 - cap.get(cv2.CAP_PROP_POS_MSEC)
             left = f[:, :1280]
     except KeyboardInterrupt:
         pass
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
         tr.close()
         sock.close()
     return 0
