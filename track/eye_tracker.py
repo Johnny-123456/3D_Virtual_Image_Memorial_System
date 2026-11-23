@@ -110,22 +110,56 @@ class EyeTracker:
         }
 
 
-def grab_left(buffers: int = 1):
-    cap = cv2.VideoCapture(DEV, cv2.CAP_V4L2)
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc("M", "J", "P", "G"))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    # 缓冲区深度 1 而不是 2：追踪器只要"最新一帧"，多一层缓冲就多 2~3 帧延迟。
-    # 实测（12fps 消费 31fps 流）：BUFFERSIZE=2 时读到的帧已经过期 214 ms，
-    # 改成 1 降到 98 ms —— 端到端延迟从 237 ms 降到 ~127 ms。
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, buffers)
-    ok = False
-    for _ in range(8):
-        ok, f = cap.read()
-    if not ok:
-        cap.release()
-        raise SystemExit("相机读帧失败")
-    return cap, f[:, :1280].copy()
+class FrameGrabber:
+    """专职抓帧线程：永远只保留最新一帧。
+
+    为什么不在主循环里串行 cap.read()：推理要 50 ms，一次循环 85 ms，而相机
+    出帧只要 33 ms。串行读到的永远是 2~3 帧前的画面（实测帧龄 70~210 ms）。
+    开个线程一直读、只留最新一帧，主循环拿到的就是 33 ms 内的画面。
+    """
+
+    def __init__(self, buffers: int = 2):
+        import threading
+
+        self.cap = cv2.VideoCapture(DEV, cv2.CAP_V4L2)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc("M", "J", "P", "G"))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, buffers)
+        ok = False
+        for _ in range(8):
+            ok, f = self.cap.read()
+        if not ok:
+            self.cap.release()
+            raise SystemExit("相机读帧失败")
+
+        self._lock = threading.Lock()
+        self._frame = f[:, :1280].copy()
+        self._age = 0.0
+        self._stop = False
+        self._th = threading.Thread(target=self._loop, daemon=True)
+        self._th.start()
+
+    def _loop(self):
+        while not self._stop:
+            ok, f = self.cap.read()
+            if not ok:
+                break
+            # POS_MSEC 是 monotonic 毫秒：这一帧"过期"了多久
+            age = time.monotonic() * 1000.0 - self.cap.get(cv2.CAP_PROP_POS_MSEC)
+            left = f[:, :1280].copy()
+            with self._lock:
+                self._frame = left
+                self._age = age
+
+    def latest(self):
+        with self._lock:
+            return self._frame, self._age
+
+    def release(self):
+        self._stop = True
+        self._th.join(timeout=1.5)
+        self.cap.release()
 
 
 def main() -> int:
@@ -172,7 +206,7 @@ def main() -> int:
         body = "nan,nan" if ex is None else ("%.4f,%.4f" % (ex, ey))
         return (body + (",%.6f" % t_cap if a.stamp else "") + "\n").encode()
 
-    cap = None
+    grab = None
     if a.replay:
         left = cv2.imread(a.replay)
         if left is None:
@@ -181,7 +215,7 @@ def main() -> int:
             return 1
         print(f"回放 {a.replay} -> udp {addr[0]}:{addr[1]}   (Ctrl-C 退出)")
     else:
-        cap, left = grab_left(a.buffers)
+        grab = FrameGrabber(a.buffers)
         print(f"追踪中 -> udp {addr[0]}:{addr[1]}   (Ctrl-C 退出)")
 
     n = 0
@@ -189,6 +223,8 @@ def main() -> int:
     frame_age = 0.0
     try:
         while True:
+            if grab is not None:
+                left, frame_age = grab.latest()
             t_cap = time.time()
             ex, ey, info = tr.process(left)
             sock.sendto(payload(ex, ey, t_cap), addr)
@@ -197,23 +233,15 @@ def main() -> int:
                 fps = n / max(time.time() - t0, 1e-6)
                 print(f"  {fps:4.1f} fps  ex={ex if ex is None else round(ex, 3)} "
                       f"ey={ey if ey is None else round(ey, 3)}  infer {info['ms']}ms"
-                      + ("" if cap is None else f"  帧龄 {frame_age:.0f}ms"), flush=True)
+                      + ("" if grab is None else f"  帧龄 {frame_age:.0f}ms"), flush=True)
             if a.replay:
                 left = cv2.imread(a.replay)      # 重新读，模拟下一帧
                 time.sleep(max(0.0, 0.033 - (time.time() - t_cap)))
-                continue
-            ok, f = cap.read()
-            if not ok:
-                break
-            # V4L2 的 POS_MSEC 是 monotonic 毫秒：读到时这一帧已经"过期"多少，
-            # 就是相机缓冲（BUFFERSIZE=2）引入的延迟，端到端要算进去。
-            frame_age = time.monotonic() * 1000.0 - cap.get(cv2.CAP_PROP_POS_MSEC)
-            left = f[:, :1280]
     except KeyboardInterrupt:
         pass
     finally:
-        if cap is not None:
-            cap.release()
+        if grab is not None:
+            grab.release()
         tr.close()
         sock.close()
     return 0
