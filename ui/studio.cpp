@@ -310,6 +310,9 @@ public:
 
     void enter()
     {
+        // 进页面就先清掉可能残留的预览进程：上一次 studio 被 kill 掉时留下的
+        // preview_server 孤儿会一直占着 /dev/video21，导致一进页面就"相机不可用"。
+        QProcess::execute("bash", {"-c", "pkill -f tools/preview_server.py; sleep 0.2"});
         m_log->clear();
         m_log->append(QString::fromUtf8("准备就绪。请站到镜头前约 1.2~1.5 米，正对镜头。"));
         m_hint->setText(QString::fromUtf8(
@@ -354,8 +357,18 @@ private:
             "先关掉追踪（或运行 pkill -f eye_tracker），\n"
             "再点「返回」重新进入本页"));
         m_prev->setAlignment(Qt::AlignCenter);
+        // 把"到底是谁占着相机"直接列出来：以前只让用户自己 pgrep，
+        // 最常见的就是上一次被 kill 掉的 studio 留下的 preview_server 孤儿。
+        {
+            QProcess who;
+            who.start("bash", {"-c", "pgrep -af 'preview_server|eye_tracker' | head -3"});
+            who.waitForFinished(600);
+            const QString list = QString::fromUtf8(who.readAllStandardOutput()).trimmed();
+            if (!list.isEmpty())
+                m_log->append(QString::fromUtf8("占用相机的进程：\n") + list);
+        }
         m_log->append(QString::fromUtf8(
-            "\n✗ 预览没有画面：相机打不开（通常是被眼动追踪器占用）。"));
+            "\n✗ 预览没有画面：相机打不开（通常是被眼动追踪器或残留的预览进程占用）。"));
         m_log->append(QString::fromUtf8(
             "  查看占用：pgrep -af 'eye_tracker|preview_server'"));
     }
@@ -396,7 +409,12 @@ private:
             m_log->append(QString::fromUtf8("✗ 资产「%1」已存在，换个名字再采集").arg(name));
             return;
         }
-        stopPreview();                      // 采集脚本要独占相机
+        // 采集脚本要独占相机：先停掉本页的预览；再清掉可能残留的预览进程
+        // （上一次 studio 被 kill -9 时留下的 preview_server 孤儿不开新预览、
+        //  但一直占着 /dev/video21，采集一开就报"被其它进程占用"）。
+        // 只清我们自己的预览进程，眼动追踪器不动（可能正在给观看页用）。
+        stopPreview();
+        QProcess::execute("bash", {"-c", "pkill -f tools/preview_server.py; sleep 0.3"});
         m_go->setEnabled(false);
         m_log->clear();
         m_log->append(QString::fromUtf8(">>> 采集与处理中，请保持站姿…\n"));

@@ -9,6 +9,10 @@
 用法（由 ui/studio 自动拉起，通常不需要手动运行）：
     python3 tools/preview_server.py --out /tmp/memorial_preview.jpg
 按 Ctrl-C 或收到 SIGTERM 退出。
+
+另外：父进程（ui/studio）如果被 kill -9 掉，本进程会被 init 收养而继续占着
+/dev/video21 —— 相机就再也不放了，下次进采集页直接"相机被占用"。所以循环里
+检查 getppid()，一旦变成 1（被收养）就自己退出。
 """
 from __future__ import annotations
 
@@ -61,6 +65,10 @@ def main() -> int:
     print(f"preview -> {a.out} ({a.width}x{h} @ {a.fps:.0f}fps)", flush=True)
 
     while _running:
+        # 父进程没了（被 kill -9 / 崩溃）就别撑着不放相机
+        if os.getppid() == 1:
+            print("父进程已退出，释放相机", flush=True)
+            break
         t0 = time.time()
         ok, frame = cap.read()
         if not ok:
