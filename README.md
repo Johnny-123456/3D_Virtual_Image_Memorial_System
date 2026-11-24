@@ -8,9 +8,12 @@
 
 ---
 
-## 项目状态（2026-11-23）
+## 项目状态（2026-11-24）
 
-> **给下一个对话的定位**：功能主线（Step 0–7）全部可用，采集→出资产→观看闭环已跑通。
+> **给下一个对话的定位**：功能主线（Step 0–7）全部可用，采集→出资产→观看闭环已跑通；
+> 另外新增 Step 9/10：**一张照片就能出资产**（动物已实测跑通）、首页可删素材。
+> 最近一轮改动：素材删除键（`f295c92`）、`tools/import_photo.py` 照片导入、
+> 视差/微动按资产分辨率归一（180 px 的小图不再被放大成夸张晃动）。
 > §8 验收 6 条里 **3 条达标、1 条不达标、2 条未测**（下节有实测数字）。
 > 当前短板是**端到端延迟 138 ms（要求 100 ms）**，瓶颈在姿态模型推理 54 ms。
 > 所有已修的问题都写在 `docs/route-D-implementation.md` §12，改动看 `git log`。
@@ -44,8 +47,11 @@ python3 tools/acceptance.py latency         # §8-2，起 tracker + viewer 量�
 2. **真正的转头**：单张照片 + 2.5D 网格做不到，需要 LivePortrait 那类神经重演
    （隐式关键点 + 生成式解码器），属于换技术路线，以周计。
 3. **观感验收没做**：需要在板子上让人连续看 5 分钟，判断晕不晕、像不像。
-4. **动物模式**：渲染管线是物种无关的，卡在"只认人"的两件模型（MODNet 抠图、
-   YOLO-pose 关键点）。具体方案与落地顺序见 **[docs/animal-mode.md](docs/animal-mode.md)**。
+4. **动物模式**：抠图已换 U²-Netp（通用显著目标），眼睛用"多阈值暗斑 + 对称配对"
+   自动定位，头部遮罩用双眼中点/瞳距的几何公式生成 → 动物也有点头与回望。
+   已用一张 180×198 的小狗照片端到端跑通（视差折算 ≈11 px @ ±15 cm），
+   细节与限制见 **[docs/animal-mode.md](docs/animal-mode.md)** §7。
+   **仍缺**：一张 ≥800 px 的真实猫狗照片做观感验证；动物眨眼故意不做。
 
 ### 最近的关键修正（2026-11-22 ~ 23）
 
@@ -60,6 +66,8 @@ python3 tools/acceptance.py latency         # §8-2，起 tracker + viewer 量�
 | `26a89ec` | 采集页预览一直黑屏（`cv2.imwrite(".tmp")` 不支持） |
 | `c54e572` | 背景板 inpaint 放射状白扇 → 金字塔填充 |
 | `17a1e9f` | 眨眼从"黑矩形"改成"填皮肤 + 睫毛线" |
+| `f295c92` | 首页删除键 + `tools/import_photo.py` 照片导入 + 视差按分辨率归一 |
+| `8fe12eb` | 进采集页前停掉眼动追踪（相机占用导致"相机无法加载"） |
 
 ## 当前进度
 
@@ -78,6 +86,8 @@ python3 tools/acceptance.py latency         # §8-2，起 tracker + viewer 量�
 | Step 7c | 眼神回望 | ✅ 头部反向局部位移，追踪到人时生效 |
 | Step 7d | 采集质量守卫（瞳距 / 标定 / 资产） | ✅ 站太远直接拒绝，不产出废资产 |
 | Step 8 | 魂盒（45° 半透镜）| ⬜ 需硬件 |
+| Step 9 | 照片导入（不经相机，一张图出资产）| ✅ `tools/import_photo.py` |
+| Step 10 | 素材管理（首页删除）| ✅ ✕ + 二次确认，`--autodelete` 可自测 |
 
 ## 目录结构
 
@@ -107,6 +117,30 @@ cd ui && mkdir -p build && cd build && cmake .. && make -j4
 
 观看页自动运行眨眼 + 眼神回望，可一键开关眼动追踪、切换三档风格。
 采集页一键完成：标定 → 深度 → 抠图 → 背景板 → 眨眼 → 头部遮罩 → 资产。
+
+**首页素材卡片右上角的 ✕ 用来删除**：二次确认（默认按钮是"取消"），
+删的是整个 `assets/<名字>/` 目录（图像/深度/标定一起走），不可恢复。
+
+### 一张照片直接出资产（不经相机）
+
+```bash
+# 动物：U²-Netp 抠图 + 自动找眼睛 + 生成头部遮罩（有点头/回望，不眨眼）
+python3 tools/import_photo.py --photo dog.jpg --name dog --species animal
+
+# 人像：MODNet 抠图，其余同上；也可以手动指定眼睛
+python3 tools/import_photo.py --photo mom.jpg --name mom --species human
+python3 tools/import_photo.py --photo dog.jpg --name dog --eyes 58,62,115,52
+
+# 想先确认眼睛找得准不准：把检测结果画到一张图上
+python3 tools/import_photo.py --photo dog.jpg --name dog --preview /tmp/eyes.png
+```
+
+产出的资产与现场采集的完全同构（rgb/depth.f32/matte.png/bg.png/head.png/meta.json），
+渲染端不需要改动。主体距离默认归一到 1.2 m（`--subject-dist`），
+所以视差强度与真实采集的资产可比。
+
+> 分辨率：源照片长边建议 ≥ 800 px。低于 300 px 会提示"放大到全屏会发虚"——
+> 链路能跑通，但别拿去做正式展示。
 
 ## 界面（Step 4）
 
