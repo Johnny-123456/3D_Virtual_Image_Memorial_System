@@ -241,6 +241,13 @@ bool DibrWidget::loadAsset(const QString &dir, QString *err)
                      m_zMax);
     if (m_w <= 0 || m_h <= 0) return fail("meta.json 宽高无效");
 
+    // 画面比窗口"窄/高"时，四周多出来的地方怎么补：
+    //   "mirror"（默认）把背景镜像填满；"black" 直接留黑（等于给素材加了黑框）。
+    // 竖版素材（比如照片导入的 180x198）两侧要补的画面比图本身还宽，镜像会
+    // 显得像"复制了一份"，这时用 black 更干净。auto 由下面 paintGL 按补边比例决定。
+    const QString frame = meta.value("frame").toString("auto");
+    m_frame = frame == "black" ? 2 : (frame == "mirror" ? 1 : 0);
+
     m_img = QImage(dir + "/rgb.png");
     if (m_img.isNull()) return fail("打不开 rgb.png");
     m_img = m_img.convertToFormat(QImage::Format_RGBA8888);
@@ -738,8 +745,18 @@ void DibrWidget::paintGL()
     m_prog.setUniformValue("uMaxShift", 70.0f * m_resScale);
     m_prog.setUniformValue("uSplit", m_split);
 
-    // 补边底衬：铺满视口（窗口比资产"更宽/更高"时才会露出来）
-    drawPass(0.0f, 3);
+    // 补边底衬：铺满视口（窗口比资产"更宽/更高"时才会露出来）。
+    // auto：补边超过画面宽度的 18% 就改成留黑 —— 竖版素材补出来的镜像面积
+    // 比原图还大，看起来像"复制了一份背景"，不如直接黑框干净。
+    bool fillBars = true;
+    if (m_frame == 2) {
+        fillBars = false;
+    } else if (m_frame == 0) {
+        const float barsX = (1.0f - m_fitX) * 0.5f;    // 单侧补边占视口宽的比例
+        const float barsY = (1.0f - m_fitY) * 0.5f;
+        fillBars = qMax(barsX, barsY) <= 0.18f;
+    }
+    if (fillBars) drawPass(0.0f, 3);
 
     // 背景层：增益 0（不位移），保证铺满整屏不露黑边
     drawPass(0.25f, 0);   // 背景也走一点视差：原来是 0，画面"太死板"

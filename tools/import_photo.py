@@ -222,6 +222,8 @@ def main() -> int:
     ap.add_argument("--subject-dist", type=float, default=1.2,
                     help="把主体归一到这个距离（米），决定视差强度")
     ap.add_argument("--matte-model", default=None)
+    ap.add_argument("--frame", default="auto", choices=["auto", "mirror", "black"],
+                    help="画面比窗口窄时两侧怎么补：auto（补边>18%% 就留黑）/ mirror / black")
     ap.add_argument("--matte-harden", default="auto", choices=["auto", "on", "off"],
                     help="把主体内部的半透明补实（U²-Netp 对动物身体常只给 0.5 的 alpha）")
     ap.add_argument("--eyes", default=None,
@@ -299,6 +301,7 @@ def main() -> int:
                        depth_source="photo_import")
     meta["species"] = a.species
     meta["source_photo"] = os.path.basename(a.photo)
+    meta["frame"] = a.frame        # 渲染端据此决定四周补边是镜像还是留黑
 
     # 4) 背景板
     depth = np.fromfile(os.path.join(out_dir, "depth.f32"), dtype=np.float32)
