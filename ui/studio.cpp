@@ -283,13 +283,31 @@ private:
     void onTick()
     {
         QFileInfo fi(g_preview);
-        if (!fi.exists()) return;
-        if (fi.lastModified() == m_stamp) return;
-        m_stamp = fi.lastModified();
-        QPixmap pm;
-        if (pm.load(g_preview))
-            m_prev->setPixmap(pm.scaled(m_prev->size(), Qt::KeepAspectRatio,
-                                        Qt::SmoothTransformation));
+        if (fi.exists() && fi.lastModified() != m_stamp) {
+            m_stamp = fi.lastModified();
+            QPixmap pm;
+            if (pm.load(g_preview)) {
+                m_previewGotFrame = true;
+                m_prev->setPixmap(pm.scaled(m_prev->size(), Qt::KeepAspectRatio,
+                                            Qt::SmoothTransformation));
+                return;
+            }
+        }
+        // 相机被别的进程占着（最常见：眼动追踪器、或上一次的 preview_server 没退）
+        // 时，preview_server 会直接退出，这里以前只有一块黑框，用户不知道发生了什么。
+        if (m_previewGotFrame || m_previewWarned) return;
+        const bool died = m_preview->state() == QProcess::NotRunning;
+        if (!died && m_previewWait.elapsed() < 2500) return;
+        m_previewWarned = true;
+        m_prev->setText(QString::fromUtf8(
+            "相机不可用\n可能被眼动追踪器或其它程序占用\n\n"
+            "先关掉追踪（或运行 pkill -f eye_tracker），\n"
+            "再点「返回」重新进入本页"));
+        m_prev->setAlignment(Qt::AlignCenter);
+        m_log->append(QString::fromUtf8(
+            "\n✗ 预览没有画面：相机打不开（通常是被眼动追踪器占用）。"));
+        m_log->append(QString::fromUtf8(
+            "  查看占用：pgrep -af 'eye_tracker|preview_server'"));
     }
 
     void startPreview()
@@ -297,6 +315,9 @@ private:
         if (m_preview->state() != QProcess::NotRunning) return;
         m_preview->start("python3", {g_root + "/tools/preview_server.py", "--out", g_preview});
         m_tick->start();
+        m_previewGotFrame = false;
+        m_previewWarned = false;
+        m_previewWait.start();
     }
 
     void stopPreview()
@@ -404,6 +425,9 @@ private:
     QTextEdit *m_log = nullptr;
     QTimer *m_tick = nullptr;
     QProcess *m_preview = nullptr;
+    QElapsedTimer m_previewWait;
+    bool m_previewGotFrame = false;
+    bool m_previewWarned = false;
     QProcess *m_capture = nullptr;
     QDateTime m_stamp;
     QString m_pendingName;
@@ -499,6 +523,14 @@ public:
         m_gaze = 0.0f;
         m_auto = true;
         updateStat();
+    }
+
+    /// 进采集页前必须停掉追踪：眼动追踪器独占相机，不停的话采集页预览打不开
+    /// （实测踩过：观看页开着追踪 → 回首页 → 点采集 → 预览一片黑）
+    void stopTracking()
+    {
+        if (m_trackBtn && m_trackBtn->isChecked()) m_trackBtn->setChecked(false);
+        toggleTracking(false);
     }
 
 signals:
@@ -613,6 +645,7 @@ public:
             m_stack->setCurrentWidget(m_stage);
         });
         connect(m_home, &HomePage::newCapture, this, [this] {
+            m_stage->stopTracking();        // 相机要让出来，否则预览打不开
             m_cap->enter();
             m_stack->setCurrentWidget(m_cap);
         });
@@ -635,7 +668,7 @@ public:
 
     /// 直接进入某个页面（kiosk 启动 / 自动化测试用）
     void goHome() { m_home->refresh(); m_stack->setCurrentWidget(m_home); }
-    void goCapture() { m_cap->enter(); m_stack->setCurrentWidget(m_cap); }
+    void goCapture() { m_stage->stopTracking(); m_cap->enter(); m_stack->setCurrentWidget(m_cap); }
     /// kiosk / 自动化测试：进采集页并立刻开始（--capture --auto-start <名字>）
     void autoStartCapture(const QString &name)
     {
