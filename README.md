@@ -67,7 +67,7 @@ python3 tools/acceptance.py latency         # §8-2，起 tracker + viewer 量�
 | `c54e572` | 背景板 inpaint 放射状白扇 → 金字塔填充 |
 | `17a1e9f` | 眨眼从"黑矩形"改成"填皮肤 + 睫毛线" |
 | `f295c92` | 首页删除键 + `tools/import_photo.py` 照片导入 + 视差按分辨率归一 |
-| `0b4a1c0` | 背景层改 cover 铺满、「影像变窄」不再是黑边；studio 默认最大化 + `--fullscreen` |
+| `3a5a616` | 背景层改 cover 铺满、「影像变窄」不再是黑边；studio 默认最大化 + `--fullscreen` |
 | `8fe12eb` | 进采集页前停掉眼动追踪（相机占用导致"相机无法加载"） |
 
 ## 当前进度
