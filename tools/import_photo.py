@@ -214,6 +214,43 @@ def read_photo(path: str) -> np.ndarray:
     return img
 
 
+def canvas_size() -> tuple:
+    """采集链路的画幅：取 rectify.json 的 valid_roi（1272x712）。
+
+    照片导入也按这个比例出资产 —— 这样所有资产长得一样，渲染端不用为
+    竖版/方图再搞特例，窗口里也不会出现"补边"（黑框或镜像）。
+    """
+    try:
+        c = json.load(open(os.path.join(ROOT, "config", "rectify.json"), encoding="utf-8"))
+        _, _, w, h = c["valid_roi"]
+        return int(w), int(h)
+    except Exception:
+        return 1272, 712
+
+
+def fit_to_canvas(img: np.ndarray, cw: int, ch: int):
+    """等比缩放并居中贴进 cw x ch 画布，返回 (画布图, 缩放比, 左上角偏移)。"""
+    ph, pw = img.shape[:2]
+    s = min(cw / float(pw), ch / float(ph))
+    nw, nh = max(1, int(round(pw * s))), max(1, int(round(ph * s)))
+    interp = cv2.INTER_AREA if s < 1.0 else cv2.INTER_CUBIC
+    rs = cv2.resize(img, (nw, nh), interpolation=interp)
+    ox, oy = (cw - nw) // 2, (ch - nh) // 2
+    return rs, s, ox, oy
+
+
+def pad_to_canvas(img: np.ndarray, cw: int, ch: int, s: float, ox: int, oy: int,
+                  fill: float, interp_flag: int):
+    """把已经算好的单通道图按同样的缩放/偏移贴进画布，空白处填 fill。"""
+    ph, pw = img.shape[:2]
+    nw = max(1, int(round(pw * s)))
+    nh = max(1, int(round(ph * s)))
+    rs = cv2.resize(img, (nw, nh), interpolation=interp_flag)
+    out = np.full((ch, cw), fill, dtype=rs.dtype)
+    out[oy:oy + nh, ox:ox + nw] = rs
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="把一张照片导入成 2.5D 渲染资产")
     ap.add_argument("--photo", required=True)
@@ -222,27 +259,38 @@ def main() -> int:
     ap.add_argument("--subject-dist", type=float, default=1.2,
                     help="把主体归一到这个距离（米），决定视差强度")
     ap.add_argument("--matte-model", default=None)
-    ap.add_argument("--frame", default="auto", choices=["auto", "mirror", "black"],
-                    help="画面比窗口窄时两侧怎么补：auto（补边>18%% 就留黑）/ mirror / black")
     ap.add_argument("--matte-harden", default="auto", choices=["auto", "on", "off"],
                     help="把主体内部的半透明补实（U²-Netp 对动物身体常只给 0.5 的 alpha）")
+    ap.add_argument("--canvas", default="capture",
+                    help='画幅：capture（按采集的 1272x712）或 "WxH"')
+    ap.add_argument("--frame", default="auto", choices=["auto", "mirror", "black"],
+                    help="补边策略（画幅已按采集比例，正常不会用到）")
     ap.add_argument("--eyes", default=None,
-                    help='手动指定两眼中心 "x1,y1,x2,y2"（像素）')
+                    help='手动指定两眼中心 "x1,y1,x2,y2"（原图像素）')
     ap.add_argument("--no-eyes", action="store_true", help="不做眼睛检测")
     ap.add_argument("--preview", default=None,
-                    help="把眼睛检测结果画到这张图上，方便用眼睛确认")
+                    help="把画布与眼睛检测结果画出来，方便用眼睛确认")
     ap.add_argument("--max-side", type=int, default=1280,
                     help="过大照片先等比缩小到长边不超过这个值")
     a = ap.parse_args()
 
+    cw, ch = canvas_size()
+    if a.canvas != "capture":
+        try:
+            cw, ch = [int(t) for t in a.canvas.lower().split("x")]
+        except Exception:
+            print("✗ --canvas 形如 1272x712")
+            return 1
+
     rgb = read_photo(a.photo)
     h, w = rgb.shape[:2]
     if max(h, w) > a.max_side:
-        s = a.max_side / float(max(h, w))
-        rgb = cv2.resize(rgb, (int(round(w * s)), int(round(h * s))),
+        sc = a.max_side / float(max(h, w))
+        rgb = cv2.resize(rgb, (int(round(w * sc)), int(round(h * sc))),
                          interpolation=cv2.INTER_AREA)
         print("  图片缩到 %dx%d" % (rgb.shape[1], rgb.shape[0]))
-    print("照片 %dx%d  %s" % (rgb.shape[1], rgb.shape[0], os.path.basename(a.photo)))
+    print("照片 %dx%d  %s  →  画幅 %dx%d（采集比例）"
+          % (rgb.shape[1], rgb.shape[0], os.path.basename(a.photo), cw, ch))
     if max(rgb.shape[:2]) < 300:
         print("  ⚠ 分辨率偏低（长边 %d px），放大到全屏会发虚；"
               "用于验证功能没问题，正式展示建议换更大的原图" % max(rgb.shape[:2]))
@@ -262,13 +310,13 @@ def main() -> int:
         c = json.load(open(CALIB, encoding="utf-8"))
         ca, cb = float(c["a"]), float(c["b"])
         depth0 = 1.0 / np.clip(ca * rel + cb, 1e-4, None)
-        ch, cw = depth0.shape
-        x0, x1 = int(cw * 0.25), int(cw * 0.75)
-        y0, y1 = int(ch * 0.10), int(ch * 0.75)
+        hh, ww = depth0.shape
+        x0, x1 = int(ww * 0.25), int(ww * 0.75)
+        y0, y1 = int(hh * 0.10), int(hh * 0.75)
         z0 = float(np.percentile(depth0[y0:y1, x0:x1], 15))
-        s = z0 / a.subject_dist          # inv 乘 s 等于距离乘 1/s
-        ca, cb = ca * s, cb * s
-        print("  标定主体距离 %.2f m，归一到 %.2f m（系数 %.3f）" % (z0, a.subject_dist, s))
+        sc = z0 / a.subject_dist          # inv 乘 sc 等于距离乘 1/sc
+        ca, cb = ca * sc, cb * sc
+        print("  标定主体距离 %.2f m，归一到 %.2f m（系数 %.3f）" % (z0, a.subject_dist, sc))
     else:
         lo, hi = np.percentile(rel, [2, 98])
         n = np.clip((rel - lo) / max(hi - lo, 1e-6), 0, 1)
@@ -276,7 +324,7 @@ def main() -> int:
         ca, cb = 1.0 / np.clip(z, 0.3, 20), 0.0
         print("  ⚠ 无标定，退化为相对深度映射")
 
-    # 2) 抠图
+    # 2) 抠图（在原图上做：黑边会让分割模型分心）
     mp = a.matte_model or (U2NET if a.species == "animal" else MODNET)
     if not os.path.isfile(mp):
         print("✗ 缺抠图模型 %s" % mp)
@@ -286,36 +334,17 @@ def main() -> int:
         matte = mm.infer(rgb)
     cov = float((matte > 0.5).mean()) * 100
     print("  matte 覆盖 %.1f%%" % cov)
+    if cov < 3 or cov > 92:
+        print("✗ 抠图覆盖 %.1f%% 不合理：主体太小或几乎占满画面，检查照片" % cov)
+        return 2
     soft = matte_is_soft(matte)
     if a.matte_harden == "on" or (a.matte_harden == "auto" and soft > 0.06):
         before = soft * 100
         matte = harden_matte(matte)
         print("  抠图加固：内部半透明像素 %.0f%% → %.0f%%（身体不再透明）"
               % (before, matte_is_soft(matte) * 100))
-    if cov < 3 or cov > 92:
-        print("✗ 抠图覆盖 %.1f%% 不合理：主体太小或几乎占满画面，检查照片" % cov)
-        return 2
 
-    # 3) 写 rgb/depth/matte 与 meta
-    meta = write_asset(out_dir, rgb, rel, ca, cb, matte=matte,
-                       depth_source="photo_import")
-    meta["species"] = a.species
-    meta["source_photo"] = os.path.basename(a.photo)
-    meta["frame"] = a.frame        # 渲染端据此决定四周补边是镜像还是留黑
-
-    # 4) 背景板
-    depth = np.fromfile(os.path.join(out_dir, "depth.f32"), dtype=np.float32)
-    depth = depth.reshape(meta["height"], meta["width"])
-    try:
-        bg = make_background(rgb, depth,
-                             max(float(np.percentile(
-                                 depth[matte > 0.5], 85) if np.any(matte > 0.5) else 2.0) * 1.6,
-                                 1.5), matte=matte)
-        cv2.imwrite(os.path.join(out_dir, "bg.png"), bg)
-    except Exception as e:
-        print("  背景板生成失败（渲染仍可用，只是背景层有残影）:", e)
-
-    # 5) 眼睛
+    # 3) 眼睛（也在原图上找，坐标再映射到画布）
     pair = None
     if not a.no_eyes:
         if a.eyes:
@@ -337,32 +366,85 @@ def main() -> int:
             else:
                 print("  ⚠ 没找到成对的眼睛：眼神微动关闭（视差与观感不受影响）")
 
-    if a.preview:
-        vis = drawover(rgb, pair)
-        cv2.imwrite(a.preview, vis)
-        print("  预览图 ->", a.preview)
+    # 4) 贴进采集比例的画布：两侧/上下留黑（0），深度填"很远"保证几乎不位移
+    rs_rgb, sc, ox, oy = fit_to_canvas(rgb, cw, ch)
+    canvas = np.zeros((ch, cw, 3), np.uint8)
+    canvas[oy:oy + rs_rgb.shape[0], ox:ox + rs_rgb.shape[1]] = rs_rgb
 
+    rel_far = float(np.clip((1.0 / 9.0 - cb) / ca if abs(ca) > 1e-6 else rel.min(),
+                            rel.min() - 5.0, rel.max()))
+    rel_c = pad_to_canvas(rel, cw, ch, sc, ox, oy, rel_far, cv2.INTER_LINEAR)
+    matte_c = pad_to_canvas(matte, cw, ch, sc, ox, oy, 0.0, cv2.INTER_LINEAR)
+
+    # 5) 写 rgb/depth/matte 与 meta
+    meta = write_asset(out_dir, canvas, rel_c, ca, cb, matte=matte_c,
+                       depth_source="photo_import")
+    meta["species"] = a.species
+    meta["source_photo"] = os.path.basename(a.photo)
+    meta["canvas"] = "%dx%d" % (cw, ch)
+    meta["frame"] = a.frame
+    meta["content_rect"] = [int(ox), int(oy), int(rs_rgb.shape[1]), int(rs_rgb.shape[0])]
+
+    # 6) 背景板：只在照片区域内做外推，画布外围保持纯黑（就是"补黑像素"）
+    depth = np.fromfile(os.path.join(out_dir, "depth.f32"), dtype=np.float32)
+    depth = depth.reshape(meta["height"], meta["width"])
+
+    # 零位移面必须在"照片区域"内统计。画布外围是补的黑边（深度填到 9 m），
+    # 连它一起算会把 z_focus 拉到 9 m，主体的视差方向就反了（踩过一次）。
+    ih, iw = rs_rgb.shape[:2]
+    z_sub = depth[oy:oy + ih, ox:ox + iw]
+    z_subject = float(np.percentile(
+        z_sub[int(ih * 0.10):int(ih * 0.75), int(iw * 0.25):int(iw * 0.75)], 15))
+    # 零位移面按"主体距离 x 1.45"取，而不是照片里背景的中位深度：
+    # 现场采集的资产实测就是这个比例（portrait3 主体 1.22 m / 焦点 1.74 m），
+    # 照片导入跟着它，视差强度才和相机采的一样，不会因为背景恰好很远而变弱。
+    z_focus = float(np.clip(z_subject * 1.45, z_sub.min() * 1.02, z_sub.max() * 0.98))
+    meta["z_subject"] = round(z_subject, 3)
+    meta["z_focus"] = round(z_focus, 3)
+    meta["z_split"] = round(max(z_subject * 1.8, 1.0), 3)
+    sub_rgb = canvas[oy:oy + rs_rgb.shape[0], ox:ox + rs_rgb.shape[1]]
+    sub_z = depth[oy:oy + rs_rgb.shape[0], ox:ox + rs_rgb.shape[1]]
+    sub_m = matte_c[oy:oy + rs_rgb.shape[0], ox:ox + rs_rgb.shape[1]]
+    bg = np.zeros((ch, cw, 3), np.uint8)
+    try:
+        far = max(float(np.percentile(sub_z[sub_m > 0.5], 85)) * 1.6, 1.5) \
+            if np.any(sub_m > 0.5) else 2.0
+        bg[oy:oy + rs_rgb.shape[0], ox:ox + rs_rgb.shape[1]] = \
+            make_background(sub_rgb, sub_z, far, matte=sub_m)
+        cv2.imwrite(os.path.join(out_dir, "bg.png"), bg)
+    except Exception as e:
+        print("  背景板生成失败（渲染仍可用，只是背景层有残影）:", e)
+
+    # 7) 眼睛/头部遮罩（坐标映射到画布）
     if pair:
         l, r, iod = pair
+        l = dict(x=l["x"] * sc + ox, y=l["y"] * sc + oy)
+        r = dict(x=r["x"] * sc + ox, y=r["y"] * sc + oy)
+        iod = float(np.hypot(r["x"] - l["x"], r["y"] - l["y"]))
         meta["eyes"] = {"left": [round(l["x"], 1), round(l["y"], 1)],
                         "right": [round(r["x"], 1), round(r["y"], 1)],
                         "iod": round(iod, 1)}
 
-        # 头部遮罩：只用到双眼中点和瞳距的几何公式，人和动物通用。
-        # 有了它渲染端才会做"轻微点头 + 回望"（Blink 仍然只有人像有，
-        # 动物的睫毛线没法用肤色填补，硬做出眨眼会糊成一团）。
         from capture.headmask import make_head_mask
         mid = ((l["x"] + r["x"]) / 2.0, (l["y"] + r["y"]) / 2.0)
-        hm = make_head_mask(rgb.shape[:2], mid, iod, matte)
+        hm = make_head_mask((ch, cw), mid, iod, matte_c)
         cv2.imwrite(os.path.join(out_dir, "head.png"),
                     (hm * 255).round().astype(np.uint8))
         print("  head.png（覆盖 %.0f%%，开启点头/回望）"
               % (float((hm > 0.5).mean()) * 100))
+        pair = (l, r, iod)
+
+    if a.preview:
+        vis = drawover(canvas, pair)
+        cv2.imwrite(a.preview, vis)
+        print("  预览图 ->", a.preview)
 
     with open(os.path.join(out_dir, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
 
     print("资产已生成:", out_dir)
+    print("  画幅 %dx%d  照片占 %dx%d（缩放 %.2fx）"
+          % (cw, ch, rs_rgb.shape[1], rs_rgb.shape[0], sc))
     print("  焦点 %.2f m  主体 %.2f m  范围 %.2f ~ %.2f m"
           % (meta["z_focus"], meta["z_subject"], meta["z_min"], meta["z_max"]))
     print("  文件:", ", ".join(sorted(os.listdir(out_dir))))
