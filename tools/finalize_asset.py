@@ -19,15 +19,12 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-_REHAB = os.path.expanduser("~/rehab-coach/src/backend")
-sys.path.insert(0, os.path.join(_REHAB, "vision"))
-sys.path.insert(0, _REHAB)
 
 from capture.blink import make_blink                       # noqa: E402
 from capture.headmask import make_head_mask                # noqa: E402
 from capture.landmarks import detect_main_person, eye_pair  # noqa: E402
 
-POSE_MODEL = os.path.expanduser("~/rehab-coach/models/yolov8n-pose.rknn")
+POSE_MODEL = None   # 由 capture.pose 统一解析（models/ 优先，~/rehab-coach 兜底）
 
 
 def main() -> int:
@@ -52,10 +49,10 @@ def main() -> int:
     if os.path.isfile(mp):
         matte = cv2.imread(mp, cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255.0
 
-    from pose_rknn import RknnPoseBackend
+    from capture.pose import load_pose
     from capture.quiet import silence_stdout
     with silence_stdout():
-        pose = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
+        pose = load_pose(POSE_MODEL, imgsz=640, conf_threshold=0.4)
     det = detect_main_person(pose, img)
     pose.release()
 

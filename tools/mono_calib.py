@@ -28,9 +28,6 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_REHAB = os.path.expanduser("~/rehab-coach/src/backend")
-sys.path.insert(0, os.path.join(_REHAB, "vision"))
-sys.path.insert(0, _REHAB)          # pose_rknn 多目标时会 import core.*
 
 from capture.camera_io import StereoCamera                       # noqa: E402
 from capture.matte import load_matte                             # noqa: E402
@@ -44,7 +41,7 @@ from capture.sgbm_truth import SGBMTruth                         # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DA_MODEL = os.path.join(ROOT, "models", "depth_anything_v2_small.rknn")
 MATTE_MODEL = os.path.join(ROOT, "models", "modnet.rknn")
-POSE_MODEL = os.path.expanduser("~/rehab-coach/models/yolov8n-pose.rknn")
+POSE_MODEL = None   # 由 capture.pose 统一解析（models/ 优先，~/rehab-coach 兜底）
 OUT_CFG = os.path.join(ROOT, "config", "mono_depth_calib.json")
 
 
@@ -115,9 +112,9 @@ def main() -> int:
     if (a.write or a.save_asset) and a.species == "human":
         from capture.landmarks import detect_main_person, eye_pair
         from capture.quiet import silence_stdout
-        from pose_rknn import RknnPoseBackend
+        from capture.pose import load_pose
         with silence_stdout():
-            pose = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
+            pose = load_pose(POSE_MODEL, imgsz=640, conf_threshold=0.4)
         pair = eye_pair(detect_main_person(pose, best["rgb"]))
         pose.release()
         if not pair:

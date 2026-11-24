@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 
 import cv2
@@ -34,10 +35,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="生成渲染资产")
     ap.add_argument("--name", default="demo")
     ap.add_argument("--frames", type=int, default=3, help="深度取多帧中位")
+    ap.add_argument("--allow-no-subject", action="store_true",
+                    help="跳过主体覆盖守卫（拍空景、或拿 MODNet 硬抠动物做实验时用）")
     a = ap.parse_args()
 
     out_dir = os.path.join(ROOT, "assets", a.name)
-    os.makedirs(out_dir, exist_ok=True)
 
     rect = Rectifier(CONFIG_PATH)
     x, y, w, h = rect.valid_roi
@@ -79,6 +81,9 @@ def main() -> int:
     fy0, fy1 = int(ch * 0.10), int(ch * 0.75)
     z_focus = float(np.median(depth[fy0:fy1, fx0:fx1]))
 
+    # 采集真的拿到画面之后才建目录：读帧失败时不留下空资产目录
+    existed = os.path.isdir(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
     cv2.imwrite(os.path.join(out_dir, "rgb.png"), rgb)
 
     # 生成人像 matte（MODNet），供渲染器做精确前景合成
@@ -96,24 +101,36 @@ def main() -> int:
     except Exception as e:
         print("  matte 生成失败（不影响主流程）:", e)
 
-    # 眨眼贴图
+    # 守卫：画面里必须真的有主体。
+    # 没有它的时候，镜头前空无一人也会照常写出资产——实测无人时 matte 只覆盖
+    # 2.8%、blink.png 却照样生成，渲染端拿到的是一张废图（还占着 assets/ 目录
+    # 让首页多一个点进去全黑的素材）。真人资产的覆盖在 15%~73%，空场景实测 2.8% / 5.9%，取 8% 作门限。
+    cov = 0.0 if matte is None else float((matte > 0.5).mean()) * 100.0
+    if cov < 8.0 and not a.allow_no_subject:
+        print(f"\n✗ 没有检测到主体（matte 只覆盖 {cov:.1f}%，真人应 ≥15%），未生成资产")
+        print("  请受采者站到镜头前 1.2~1.5m 处重试；只想拍空景/动物实验时"
+              "加 --allow-no-subject")
+        if not existed:
+            shutil.rmtree(out_dir, ignore_errors=True)
+        return 3
+
+    # 眨眼贴图。用 detect_main_person 只认画面中央的受采者：直接 pb.detect()
+    # 在多人画面里会选中背景路人（实测 portrait3 检出 3 人），眨眼就贴错脸了。
     try:
-        import sys as _sys
-        __REHAB = os.path.expanduser("~/rehab-coach/src/backend")
-sys.path.insert(0, os.path.join(_REHAB, "vision"))
-sys.path.insert(0, _REHAB)   # pose_rknn 多目标时会 import core.*
-        from pose_rknn import RknnPoseBackend
         from capture.blink import make_blink
-        pb = RknnPoseBackend(os.path.expanduser(
-            "~/rehab-coach/models/yolov8n-pose.rknn"), imgsz=640, conf_threshold=0.4)
-        det = pb.detect(rgb)
-        pb.release()
-        kp = det["keypoints_2d"] if det else {}
-        if "left_eye" in kp and "right_eye" in kp:
-            le, re_ = kp["left_eye"], kp["right_eye"]
-            inter = float(np.hypot(le["x"] - re_["x"], le["y"] - re_["y"]))
+        from capture.landmarks import detect_main_person, eye_pair
+        from capture.pose import load_pose
+        pb = load_pose(imgsz=640, conf_threshold=0.4)
+        try:
+            det = detect_main_person(pb, rgb)
+        finally:
+            pb.release()
+        pair = eye_pair(det)
+        if pair:
+            le, re_, inter, _mid = pair
             cv2.imwrite(os.path.join(out_dir, "blink.png"),
-                        make_blink(rgb, [(le["x"], le["y"]), (re_["x"], re_["y"])], inter))
+                        make_blink(rgb, [(le["x"], le["y"]),
+                                         (re_["x"], re_["y"])], inter))
             print("  blink.png 已生成")
     except Exception as e:
         print("  眨眼贴图生成失败（不影响主流程）:", e)

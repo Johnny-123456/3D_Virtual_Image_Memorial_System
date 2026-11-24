@@ -37,21 +37,29 @@ import os
 import sys
 import time
 
+# 必须在 import cv2 之前：pip 版 OpenCV 会往环境里写它自带的 Qt 插件路径，
+# 之后 cv2.imshow 去加载系统 Qt 时会直接崩，报
+#   "Could not load the Qt platform plugin xcb ... even though it was found"
+# acceptance.py 的 _clean_env 是同一件事的另一半（那份清的是子进程的环境）。
+os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
+os.environ.pop("QT_QPA_FONTDIR", None)
+# 板上的图形会话属于 elf；从 SSH 里直接跑时这两个变量都是空的
+os.environ.setdefault("DISPLAY", ":0")
+if os.path.isfile("/run/user/1000/gdm/Xauthority"):
+    os.environ.setdefault("XAUTHORITY", "/run/user/1000/gdm/Xauthority")
+
 import cv2
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-_REHAB = os.path.expanduser("~/rehab-coach/src/backend")
-sys.path.insert(0, os.path.join(_REHAB, "vision"))
-sys.path.insert(0, _REHAB)   # pose_rknn 多目标时会 import core.*
 
 from capture.camera_io import CAMERA_BY_ID, FALLBACK_DEVICE          # noqa: E402
 from capture.pipeline import (MIN_DISPARITY, NUM_DISPARITIES,        # noqa: E402
                               evaluate, fit_affine, process_frame,
                               write_asset, write_background)
 
-POSE_MODEL = os.path.expanduser("~/rehab-coach/models/yolov8n-pose.rknn")
+POSE_MODEL = None   # 由 capture.pose 统一解析（models/ 优先，~/rehab-coach 兜底）
 DA_MODEL = os.path.join(ROOT, "models", "depth_anything_v2_small.rknn")
 MATTE_MODEL = os.path.join(ROOT, "models", "modnet.rknn")
 
@@ -199,12 +207,16 @@ def main() -> int:
     ap.add_argument("--frames", type=int, default=3, help="采集帧数")
     a = ap.parse_args()
 
-    for p in (POSE_MODEL, DA_MODEL, MATTE_MODEL):
+    from capture.pose import model_file
+    if model_file() is None:
+        print("缺少姿态模型：把 yolov8n-pose.rknn 放到 models/ 下")
+        return 1
+    for p in (DA_MODEL, MATTE_MODEL):
         if not os.path.isfile(p):
             print("缺少模型:", p)
             return 1
 
-    from pose_rknn import RknnPoseBackend
+    from capture.pose import load_pose
     from capture.quiet import silence_stdout
     from capture.mono_depth import MonocularDepth
     from capture.matte import PortraitMatte
@@ -213,7 +225,7 @@ def main() -> int:
 
     print("[1/3] 加载姿态模型 ...", flush=True)
     with silence_stdout():
-        pose = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
+        pose = load_pose(POSE_MODEL, imgsz=640, conf_threshold=0.4)
     cap = open_camera()
     state = {"auto": False, "good_since": None, "countdown": None}
 
@@ -336,7 +348,7 @@ def main() -> int:
     # （实测瞳距 2.8px 也照常出资产，head.png 覆盖 0%，渲染完全无效）。
     from capture.landmarks import detect_main_person, eye_pair
     with silence_stdout():
-        pb = RknnPoseBackend(POSE_MODEL, imgsz=640, conf_threshold=0.4)
+        pb = load_pose(POSE_MODEL, imgsz=640, conf_threshold=0.4)
     pair = eye_pair(detect_main_person(pb, best["rgb"]))
     pb.release()
     if not pair or pair[2] < 45.0:      # <45px ≈ 3m 以外，不是受采者

@@ -31,5 +31,3 @@ probe_*.jpg
 # Qt 构建产物
 ui/build/
 
-# ---- 本地验证中间产物 ----
-_verify/

@@ -108,7 +108,7 @@ python3 tools/finalize_asset.py assets/mycat --species animal   # 只打印"跳�
 素材：网上随手找的小狗正面照 `dog.webp`，180×198 px（**分辨率很低，只是功能验证**）。
 
 ```bash
-python3 tools/import_photo.py --photo _verify/dog.webp --name dog --species animal
+python3 tools/import_photo.py --photo assets/dog/source.webp --name dog --species animal
 ```
 
 | 环节 | 结果 |

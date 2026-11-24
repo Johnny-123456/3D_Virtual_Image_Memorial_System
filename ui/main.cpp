@@ -1,5 +1,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QDir>
+#include <QFileInfo>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
@@ -219,6 +221,28 @@ private:
     bool m_tracking = false;
 };
 
+/// 把 --asset 解析成真正的目录。
+///
+/// 以前这里写死 `"../assets/" + 名字`，只在「当前目录正好是仓库根」时才对：
+/// 从 ui/build 跑解析到 ui/assets、从仓库根跑解析到上一级的 assets，
+/// 只有绝对路径能用。studio 早就按可执行文件定位了，viewer 没跟上。
+static QString resolveAssetDir(const QString &a)
+{
+    if (a.isEmpty()) return a;
+    if (QFileInfo(a).isAbsolute()) return a;
+    // 1) 当前目录下直接给的就是资产目录（兼容 --asset ./assets/xxx 与老习惯）
+    if (QFileInfo(a + "/meta.json").isFile()) return a;
+    // 2) 仓库根 + assets/<名字>：ui/build/../.. = 仓库根，与 studio 一致
+    const QString root =
+        QDir(QCoreApplication::applicationDirPath() + "/../..").canonicalPath();
+    const QString byRoot = root + "/assets/" + a;
+    if (QFileInfo(byRoot + "/meta.json").isFile()) return byRoot;
+    // 3) 仓库根下的相对路径
+    const QString plain = root + "/" + a;
+    if (QFileInfo(plain + "/meta.json").isFile()) return plain;
+    return byRoot;   // 都不存在：返回最可能的位置，报错时能看出找的是哪
+}
+
 int main(int argc, char **argv)
 {
     // 垂直同步：不锁的话画面在动的时候会出现水平撕裂（实测反馈）
@@ -228,7 +252,8 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
     QCommandLineParser p;
     p.addHelpOption();
-    QCommandLineOption optAsset({"a", "asset"}, "资产目录", "dir", "../assets/demo");
+    QCommandLineOption optAsset({"a", "asset"},
+                                "资产名（assets/ 下）或资产目录", "dir", "demo");
     QCommandLineOption optSnap({"s", "snapshot"}, "渲染一帧存 PNG 后退出", "png");
     QCommandLineOption optEye({"e", "eye"}, "快照时的视点 x,y", "x,y", "0,0");
     QCommandLineOption optFull({"f", "fullscreen"}, "全屏启动");
@@ -246,7 +271,8 @@ int main(int argc, char **argv)
                   optPort, optStyle, optBlink, optGaze, optSecond, optSnapScale});
     p.process(app);
 
-    Viewer v(p.value(optAsset), quint16(p.value(optPort).toUShort()));
+    Viewer v(resolveAssetDir(p.value(optAsset)),
+             quint16(p.value(optPort).toUShort()));
 
     if (p.isSet(optSecond)) {
         // 复现"退出一个素材再点另一个"：先离开观看页（隐藏 → 再显示），
@@ -257,7 +283,7 @@ int main(int argc, char **argv)
         QCoreApplication::processEvents();
         const QString d2 = p.value(optSecond);
         QString err;
-        v.gl()->loadAsset(d2.startsWith("/") ? d2 : QString("../assets/") + d2, &err);
+        v.gl()->loadAsset(resolveAssetDir(d2), &err);
         if (!err.isEmpty()) qWarning() << "第二次 loadAsset:" << err;
     }
 

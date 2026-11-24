@@ -17,6 +17,10 @@
 > §8 验收 6 条里 **3 条达标、1 条不达标、2 条未测**（下节有实测数字）。
 > 当前短板是**端到端延迟 138 ms（要求 100 ms）**，瓶颈在姿态模型推理 54 ms。
 > 所有已修的问题都写在 `docs/route-D-implementation.md` §12，改动看 `git log`。
+>
+> **2026-11-24 全链路体检**：把「采集→抠像→深度→眨眼/遮罩→渲染→追踪→验收」
+> 七段逐段跑了一遍，修掉 6 个 BUG（其中 2 个是"这条路根本跑不起来"）。
+> 姿态后端已内置到 `third_party/pose/`，项目**不再依赖隔壁 `rehab-coach`**。
 
 ### §8 验收实测
 
@@ -32,12 +36,16 @@
 微动（"别太死板"）：呼吸（纵向 0.26% + 横向 0.7 px）、点头（头部 1.8 px / 8.6 s）、
 眨眼（2.5–6 s）、眼神（两眼小椭圆内 1–2 px 游移）、背景 25% 视差、回望（轻微前倾）。
 
-复跑方式（两条命令，不占相机/不要求真人在场）：
+复跑方式（`parallax` 完全不占相机；`latency` 加 `--replay` 后也不占相机）：
 
 ```bash
-python3 tools/acceptance.py parallax        # §8-1，渲染快照 + 光流测位移
-python3 tools/acceptance.py latency         # §8-2，起 tracker + viewer 量端到端
+python3 tools/acceptance.py parallax              # §8-1，渲染快照 + 光流测位移
+python3 tools/acceptance.py latency               # §8-2，起 tracker + viewer（需要真人）
+python3 tools/acceptance.py latency --replay      # 无人版：只量「推理+传输+呈现」
 ```
+
+`--replay` 用资产自己的 `rgb.png` 循环喂追踪器代替相机，所以**不含相机帧龄**
+（真实约 60–70 ms），它会明确拒绝做 <100 ms 判定——别把它的数字当端到端。
 
 ### 改渲染之后必跑的回归检查
 
@@ -86,6 +94,40 @@ cp -r assets/portrait2 assets/_tmp && ./ui/build/memorial_studio --autodelete _t
    已用一张 180×198 的小狗照片端到端跑通（视差折算 ≈11 px @ ±15 cm），
    细节与限制见 **[docs/animal-mode.md](docs/animal-mode.md)** §7。
    **仍缺**：一张 ≥800 px 的真实猫狗照片做观感验证；动物眨眼故意不做。
+5. **真实采集必须有人**：`capture_wizard.py` / `make_asset.py` / `mono_calib.py`
+   都要受采者站在 1.2~1.5 m（瞳距 ≥45 px、matte 覆盖 ≥8%）才出资产，否则明确
+   拒绝——这是故意的，不是 BUG。CI/无人环境请用 `import_photo.py` 或
+   `acceptance.py --replay`。
+6. **`make_asset.py` 是开发工具**：没有采集向导那套实时质检与倒计时，只保留了
+   主体守卫。正式采集走 `tools/capture_wizard.py` 或 studio 的采集页。
+
+### 全链路体检记录（2026-11-24）
+
+一次把七段链路各跑一遍，按"能不能跑"排序修了 6 个：
+
+| # | 位置 | 症状 | 原因 / 修法 |
+|---|---|---|---|
+| 1 | `tools/make_asset.py` | **整个文件 SyntaxError**，`import` 就挂 | 某次全局替换把两行 `sys.path.insert` 顶到了行首，且 `__REHAB`/`_REHAB` 名字不一致。重写该块 |
+| 2 | `tools/capture_wizard.py` | 一启动就 `Could not load the Qt platform plugin xcb` | pip 版 OpenCV 往环境里塞了自己的 Qt 插件路径。改为 `import cv2` **之前**清掉 `QT_QPA_PLATFORM_PLUGIN_PATH`/`QT_QPA_FONTDIR`，并给 DISPLAY/XAUTHORITY 兜底值 |
+| 3 | `ui/main.cpp` | `--asset portrait3` 必定"打不开 meta.json" | 路径按 CWD 拼 `"../assets/"`，从仓库根和 `ui/build` 跑都是错的；studio 早就按可执行文件定位。新增 `resolveAssetDir()`：绝对路径 → CWD → 可执行文件/../.. → 仓库根 |
+| 4 | 7 个文件 | 项目不自包含，换个机器眨眼/遮罩/追踪全静默降级 | 每个文件各写一遍 `~/rehab-coach/...`。收敛到 `capture/pose.py`（唯一定位点），并把 pose 后端 + 模型内置到 `third_party/pose/` 与 `models/` |
+| 5 | `tools/make_asset.py` | **镜头前没人也照常写出资产**（matte 2.8%、blink 照样生成） | 缺主体守卫 + 先建目录后采集。加 matte 覆盖 ≥8% 守卫（`--allow-no-subject` 可跳过），失败时删掉新建的空目录并 exit 3 |
+| 6 | `tools/acceptance.py` | README 说 latency"不要求真人在场"，实际必须有人 | 追踪器早就有 `--replay`，但没接上。补 `--replay`，并让它拒绝拿不含相机帧龄的数字去判 <100 ms |
+
+顺带清理：删掉 `_verify/`（127 个一次性调试脚本），小狗源图移到
+`assets/dog/source.webp`。
+
+**修完后的实测**（无人、不占相机）：
+
+| 检查 | 结果 |
+|---|---|
+| `acceptance.py parallax` portrait / portrait2 / portrait3 @1.0 m | 23.96 / 44.66 / 16.34 px，全部 ≥8 ✓ |
+| `acceptance.py latency --replay` | 推理+传输+呈现 76.5 ms（推理 ~58 ms）；不含相机帧龄，不作达标判定 |
+| `regress_render.py`（4 资产 × 8 参数） | 32/32 出图 |
+| `capture_wizard.py` 启动 | 进入预览，Qt 报错 0 条 |
+| `make_asset.py` 无人 | 拒绝出资产（matte 5.9% < 8%），目录已回滚 |
+| `mono_calib.py --write` 无人 | 拒绝写标定（瞳距 1.2 px），`config/mono_depth_calib.json` 未改动 |
+| `eye_tracker.py --image` / `make_blink` / `make_headmask` / `finalize_asset` | 全部通过；且 `HOME=/tmp/nohome`（无 rehab-coach）下同样通过 → 已自包含 |
 
 ### 最近的关键修正（2026-11-22 ~ 23）
 
@@ -105,6 +147,9 @@ cp -r assets/portrait2 assets/_tmp && ./ui/build/memorial_studio --autodelete _t
 | `25fa045` | 补边改成"背景镜像延伸"，且背景/主体同比例（修"素材没匹配好"）|
 | `next` | 抠图加固：U²-Netp 给动物身体的 0.5 alpha 补实，身体不再半透明 |
 | `8fe12eb` | 进采集页前停掉眼动追踪（相机占用导致"相机无法加载"） |
+| 本轮 | `capture/pose.py`：姿态后端唯一定位点（内置 `third_party/pose/`），项目自包含 |
+| 本轮 | `make_asset.py` 语法错误 + 主体守卫；`capture_wizard.py` Qt 插件崩溃 |
+| 本轮 | `memorial_viewer` 资产路径按可执行文件解析；`acceptance.py latency --replay` |
 
 ## 当前进度
 
@@ -262,7 +307,8 @@ python3 tools/rectify_check.py              # Step 1 验收：极线对齐
 python3 tools/depth_eval.py --frames 6      # 深度质量评测（含米制深度）
 python3 tools/depth_eval.py --visual /tmp/x # 另存可视化
 python3 tools/acceptance.py parallax        # §8-1 视差验收（离屏渲染，不占相机）
-python3 tools/acceptance.py latency         # §8-2 延迟验收（起 tracker + viewer）
+python3 tools/acceptance.py latency         # §8-2 延迟验收（起 tracker + viewer，需真人）
+python3 tools/acceptance.py latency --replay # 同上但不占相机（不含相机帧龄）
 ```
 
 ## 关键结论（踩过的坑）

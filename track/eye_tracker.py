@@ -47,23 +47,17 @@ import cv2
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_REHAB = os.path.expanduser("~/rehab-coach/src/backend")
-REHAB = os.path.join(_REHAB, "vision")
-MODEL = os.path.expanduser("~/rehab-coach/models/yolov8n-pose.rknn")
+MODEL = None   # 由 capture.pose 统一解析（models/ 优先，~/rehab-coach 兜底）
 DEV = "/dev/v4l/by-id/usb-CCB_Camera_CCB_Camera-video-index0"
 
-if _REHAB not in sys.path:
-    sys.path.insert(0, _REHAB)
-if REHAB not in sys.path:
-    sys.path.insert(0, REHAB)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
 class EyeTracker:
-    def __init__(self, model: str = MODEL, sens: float = 0.3, alpha: float = 0.35):
-        from pose_rknn import RknnPoseBackend
-        self.pose = RknnPoseBackend(model, imgsz=640, conf_threshold=0.4)
+    def __init__(self, model: str | None = MODEL, sens: float = 0.3, alpha: float = 0.35):
+        from capture.pose import load_pose
+        self.pose = load_pose(model, imgsz=640, conf_threshold=0.4)
         self.sens = sens
         self.alpha = alpha
         self.ex = 0.0
@@ -176,8 +170,9 @@ def main() -> int:
                     help="V4L2 缓冲深度（默认 1：追踪只要最新帧，越深延迟越大）")
     a = ap.parse_args()
 
-    if not os.path.isfile(MODEL):
-        print(f"✗ 缺少模型: {MODEL}")
+    from capture.pose import model_file
+    if model_file() is None:
+        print("✗ 缺少姿态模型：把 yolov8n-pose.rknn 放到 models/ 下")
         return 1
 
     tr = EyeTracker(sens=a.sens)
