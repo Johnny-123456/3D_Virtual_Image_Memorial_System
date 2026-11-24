@@ -753,7 +753,13 @@ int main(int argc, char **argv)
     app.setStyleSheet(kQss);
     Studio w;
     w.resize(1280, 720);
-    w.show();
+    // 默认最大化：板子屏幕是 1280x720，还带顶栏和 dock，窗口化只剩 586 px 高，
+    // 16:9 的资产只能按高度铺，左右就空出黑边（用户反馈"影像变窄了"）。
+    bool fullscreen = false;
+    for (int i = 1; i < argc; ++i)
+        if (QString(argv[i]) == "--fullscreen") fullscreen = true;
+    if (fullscreen) w.showFullScreen();
+    else w.showMaximized();
 
     // --asset <名称|路径>  直接进入观看页；--capture 直接进入采集页
     const QStringList args = app.arguments();

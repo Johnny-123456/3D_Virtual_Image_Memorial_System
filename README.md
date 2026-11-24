@@ -67,6 +67,7 @@ python3 tools/acceptance.py latency         # §8-2，起 tracker + viewer 量�
 | `c54e572` | 背景板 inpaint 放射状白扇 → 金字塔填充 |
 | `17a1e9f` | 眨眼从"黑矩形"改成"填皮肤 + 睫毛线" |
 | `f295c92` | 首页删除键 + `tools/import_photo.py` 照片导入 + 视差按分辨率归一 |
+| `0b4a1c0` | 背景层改 cover 铺满、「影像变窄」不再是黑边；studio 默认最大化 + `--fullscreen` |
 | `8fe12eb` | 进采集页前停掉眼动追踪（相机占用导致"相机无法加载"） |
 
 ## 当前进度
@@ -113,7 +114,14 @@ cd ui && mkdir -p build && cd build && cmake .. && make -j4
 # 直接进入观看页 / 采集页
 ./ui/build/memorial_studio --asset portrait2
 ./ui/build/memorial_studio --capture
+
+# 全屏（kiosk / 展台上用；默认是最大化）
+./ui/build/memorial_studio --fullscreen
 ```
+
+> **画面比例**：背景层按 cover 铺满视口，主体层按 contain 保比例。
+> 所以窗口不是 16:9 时，两侧看到的是背景的延伸，而不是黑边
+> （之前是纯黑边，看起来像"影像被挤窄了"）。
 
 观看页自动运行眨眼 + 眼神回望，可一键开关眼动追踪、切换三档风格。
 采集页一键完成：标定 → 深度 → 抠图 → 背景板 → 眨眼 → 头部遮罩 → 资产。

@@ -35,6 +35,8 @@ uniform float uGaze, uGazeGain;
 
 varying vec2 vUV;
 
+uniform float uCoverX, uCoverY, uFitCover;
+
 void main() {
     float z = texture2D(uDepthTex, aUV).r;
     z = max(z, 0.15);
@@ -64,8 +66,12 @@ void main() {
     pos.x += 0.8 * uPx * sin(uTime * 0.7);
 
     vUV = aUV;
-    gl_Position = vec4((pos.x / uHalfW) * uFitX,
-                       (pos.y / uHalfH) * uFitY, 0.0, 1.0);
+    // 背景层走 cover（铺满视口、允许裁掉上下/左右），主体层走 contain。
+    // 只 contain 的话，窗口比例和资产比例不一致时两侧是纯黑边，看着像
+    // "影像被挤窄了"；背景铺满后接缝也没有了。
+    vec2 fit = (uFitCover > 0.5) ? vec2(uCoverX, uCoverY) : vec2(uFitX, uFitY);
+    gl_Position = vec4((pos.x / uHalfW) * fit.x,
+                       (pos.y / uHalfH) * fit.y, 0.0, 1.0);
 }
 )";
 
@@ -617,11 +623,17 @@ void DibrWidget::resizeGL(int w, int h)
     const float aa = float(m_w) / float(m_h);
     if (wa > aa) { m_fitX = aa / wa; m_fitY = 1.0f; }
     else { m_fitX = 1.0f; m_fitY = wa / aa; }
+
+    // cover：等比放大到"两个方向都不小于视口"。ma>1 时多出来的部分被裁掉，
+    // 背景层用它铺满，所以任何窗口比例下都不会露出黑边。
+    const float cz = (wa > aa) ? (wa / aa) : (aa / wa);
+    m_coverX = m_coverY = cz;
 }
 
 void DibrWidget::drawPass(float gainScale, int pass)
 {
     m_prog.setUniformValue("uPass", pass);
+    m_prog.setUniformValue("uFitCover", pass == 0 ? 1.0f : 0.0f);
     m_prog.setUniformValue("uGain", m_gain * gainScale * m_resScale);
     m_vao.bind();
     glDrawElements(GL_TRIANGLES, m_indexCount, GL_UNSIGNED_INT, nullptr);
@@ -702,6 +714,9 @@ void DibrWidget::paintGL()
     m_prog.setUniformValue("uHalfH", float(m_h) * 0.5f);
     m_prog.setUniformValue("uFitX", m_fitX);
     m_prog.setUniformValue("uFitY", m_fitY);
+    m_prog.setUniformValue("uCoverX", m_coverX);
+    m_prog.setUniformValue("uCoverY", m_coverY);
+    m_prog.setUniformValue("uFitCover", 0.0f);
     m_prog.setUniformValue("uTime", m_time);
     // 视差增益按资产宽度归一。gain=75 是在 1272 px 宽的现场采集资产上标定的
     // （±1 视点在 1.0 m 处约 32 px ≈ 2.5% 画面宽）。换成 180 px 的照片时若照搬
