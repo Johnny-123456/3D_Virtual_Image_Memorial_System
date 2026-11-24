@@ -111,7 +111,7 @@ cp -r assets/portrait2 assets/_tmp && ./ui/build/memorial_studio --autodelete _t
 | 2 | `tools/capture_wizard.py` | 一启动就 `Could not load the Qt platform plugin xcb` | pip 版 OpenCV 往环境里塞了自己的 Qt 插件路径。改为 `import cv2` **之前**清掉 `QT_QPA_PLATFORM_PLUGIN_PATH`/`QT_QPA_FONTDIR`，并给 DISPLAY/XAUTHORITY 兜底值 |
 | 3 | `ui/main.cpp` | `--asset portrait3` 必定"打不开 meta.json" | 路径按 CWD 拼 `"../assets/"`，从仓库根和 `ui/build` 跑都是错的；studio 早就按可执行文件定位。新增 `resolveAssetDir()`：绝对路径 → CWD → 可执行文件/../.. → 仓库根 |
 | 4 | 7 个文件 | 项目不自包含，换个机器眨眼/遮罩/追踪全静默降级 | 每个文件各写一遍 `~/rehab-coach/...`。收敛到 `capture/pose.py`（唯一定位点），并把 pose 后端 + 模型内置到 `third_party/pose/` 与 `models/` |
-| 5 | `tools/make_asset.py` | **镜头前没人也照常写出资产**（matte 2.8%、blink 照样生成） | 缺主体守卫 + 先建目录后采集。加 matte 覆盖 ≥8% 守卫（`--allow-no-subject` 可跳过），失败时删掉新建的空目录并 exit 3 |
+| 5 | `tools/make_asset.py` | **镜头前没人也照常写出资产**（blink 照样生成） | 缺主体守卫 + 先建目录后采集。守卫先试了 matte 覆盖率，**不行**（空场景 MODNet 也给 10.6~13.4%，真人 25%+，区间重叠）；改用**瞳距 ≥45px**（与采集向导一致，空场景的假眼睛只有 0.9~5.3px），`--allow-no-subject` 可跳过，失败时删掉新建的空目录并 exit 3 |
 | 6 | `tools/acceptance.py` | README 说 latency"不要求真人在场"，实际必须有人 | 追踪器早就有 `--replay`，但没接上。补 `--replay`，并让它拒绝拿不含相机帧龄的数字去判 <100 ms |
 
 顺带清理：删掉 `_verify/`（127 个一次性调试脚本），小狗源图移到
@@ -125,7 +125,7 @@ cp -r assets/portrait2 assets/_tmp && ./ui/build/memorial_studio --autodelete _t
 | `acceptance.py latency --replay` | 推理+传输+呈现 76.5 ms（推理 ~58 ms）；不含相机帧龄，不作达标判定 |
 | `regress_render.py`（4 资产 × 8 参数） | 32/32 出图 |
 | `capture_wizard.py` 启动 | 进入预览，Qt 报错 0 条 |
-| `make_asset.py` 无人 | 拒绝出资产（matte 5.9% < 8%），目录已回滚 |
+| `make_asset.py` 无人 | 拒绝出资产（瞳距 1.4 / 5.3 px < 45 px），目录已回滚 |
 | `mono_calib.py --write` 无人 | 拒绝写标定（瞳距 1.2 px），`config/mono_depth_calib.json` 未改动 |
 | `eye_tracker.py --image` / `make_blink` / `make_headmask` / `finalize_asset` | 全部通过；且 `HOME=/tmp/nohome`（无 rehab-coach）下同样通过 → 已自包含 |
 

@@ -66,7 +66,9 @@ MODNet 在动物上会漏毛、把耳朵吃掉。可选：
 
 ```bash
 # 手工准备一张动物照片的 rgb.png，跑现有管线看视差是否正常
-python3 tools/make_asset.py --name cat_demo
+# 注意 --allow-no-subject：make_asset 的守卫要求"画面中央有瞳距 ≥45px 的人"
+# （空场景里姿态模型会编出 1~5px 的假眼睛），拍动物/空景必须显式跳过它
+python3 tools/make_asset.py --name cat_demo --allow-no-subject
 ./ui/build/memorial_viewer --asset assets/cat_demo --snapshot /tmp/cat.png --eye 0.5 0
 ```
 

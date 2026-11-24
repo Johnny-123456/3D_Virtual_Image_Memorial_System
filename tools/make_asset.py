@@ -101,23 +101,11 @@ def main() -> int:
     except Exception as e:
         print("  matte 生成失败（不影响主流程）:", e)
 
-    # 守卫：画面里必须真的有主体。
-    # 没有它的时候，镜头前空无一人也会照常写出资产——实测无人时 matte 只覆盖
-    # 2.8%、blink.png 却照样生成，渲染端拿到的是一张废图（还占着 assets/ 目录
-    # 让首页多一个点进去全黑的素材）。真人资产的覆盖在 15%~73%，空场景实测 2.8% / 5.9%，取 8% 作门限。
-    cov = 0.0 if matte is None else float((matte > 0.5).mean()) * 100.0
-    if cov < 8.0 and not a.allow_no_subject:
-        print(f"\n✗ 没有检测到主体（matte 只覆盖 {cov:.1f}%，真人应 ≥15%），未生成资产")
-        print("  请受采者站到镜头前 1.2~1.5m 处重试；只想拍空景/动物实验时"
-              "加 --allow-no-subject")
-        if not existed:
-            shutil.rmtree(out_dir, ignore_errors=True)
-        return 3
-
-    # 眨眼贴图。用 detect_main_person 只认画面中央的受采者：直接 pb.detect()
-    # 在多人画面里会选中背景路人（实测 portrait3 检出 3 人），眨眼就贴错脸了。
+    # 受采者检测：只认画面中央的那个人（直接 pb.detect() 在多人画面里会选中
+    # 背景路人——实测 portrait3 检出 3 人，眨眼就贴到别人脸上了）。
+    # 只推一次，守卫和眨眼贴图共用。
+    det = pair = None
     try:
-        from capture.blink import make_blink
         from capture.landmarks import detect_main_person, eye_pair
         from capture.pose import load_pose
         pb = load_pose(imgsz=640, conf_threshold=0.4)
@@ -126,14 +114,42 @@ def main() -> int:
         finally:
             pb.release()
         pair = eye_pair(det)
-        if pair:
+    except Exception as e:
+        print("  受采者检测不可用（姿态后端缺失？）:", e)
+
+    # 守卫：画面里必须真的有一个够近的受采者。
+    # 没有它的时候镜头前空无一人也会照常写出资产（blink.png 照样生成），
+    # 渲染端拿到的是一张废图，首页还多一个点进去全黑的素材。
+    #
+    # 一开始想用 matte 覆盖率当门限，**不够**：实测空场景 MODNet 也会给到
+    # 10.6%~13.4%（桌椅杂物），真人 25%+，区间重叠。真正能分开的是瞳距——
+    # 空场景里姿态模型编出来的"双眼"瞳距只有 0.9px，而 1.2m 处的真人 76px。
+    # 所以以瞳距 >=45px 为准（阈值与 capture_wizard.py / mono_calib.py 一致），
+    # matte 覆盖率只作为辅助信息打出来。
+    cov = 0.0 if matte is None else float((matte > 0.5).mean()) * 100.0
+    iod = 0.0 if pair is None else float(pair[2])
+    if iod < 45.0 and not a.allow_no_subject:
+        print(f"\n✗ 画面中央没有够近的受采者（瞳距 {iod:.1f}px < 45px，"
+              f"matte 覆盖 {cov:.1f}%），未生成资产")
+        print("  请受采者站到镜头前 1.2~1.5m 处、位于画面中央后重试；"
+              "只想拍空景/动物实验时加 --allow-no-subject")
+        if not existed:
+            shutil.rmtree(out_dir, ignore_errors=True)
+        return 3
+
+    # 眨眼贴图（复用上面的检测结果）
+    if pair:
+        try:
+            from capture.blink import make_blink
             le, re_, inter, _mid = pair
             cv2.imwrite(os.path.join(out_dir, "blink.png"),
                         make_blink(rgb, [(le["x"], le["y"]),
                                          (re_["x"], re_["y"])], inter))
             print("  blink.png 已生成")
-    except Exception as e:
-        print("  眨眼贴图生成失败（不影响主流程）:", e)
+        except Exception as e:
+            print("  眨眼贴图生成失败（不影响主流程）:", e)
+    else:
+        print("  没检测到成对的眼睛：跳过 blink.png（视差不受影响）")
 
     # 顺手生成背景板（去掉主体），供 DIBR 背景层使用，避免鬼影
     try:
