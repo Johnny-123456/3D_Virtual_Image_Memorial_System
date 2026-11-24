@@ -39,6 +39,40 @@ python3 tools/acceptance.py parallax        # §8-1，渲染快照 + 光流测�
 python3 tools/acceptance.py latency         # §8-2，起 tracker + viewer 量端到端
 ```
 
+### 改渲染之后必跑的回归检查
+
+给某个素材/某种比例做的改动，很容易顺手把别的素材改坏（本项目踩过：为了
+让狗铺满而把背景层改成 cover，结果所有人像都变成"背景被放大、人物没放大"）。
+所以动 `dibrwidget.*` / `studio.cpp` 之后按这个清单走一遍：
+
+```bash
+# 1) 取改动前的提交编一个基线二进制
+git worktree add /tmp/base 8fe12eb
+cd /tmp/base/ui && mkdir -p build && cd build && cmake .. && make -j4 memorial_viewer
+
+# 2) 逐资产 × 逐参数（8 种：正视点/左右/上下/回望/眨眼/两种风格）逐像素对比
+python3 tools/regress_render.py --baseline /tmp/base/ui/build/memorial_viewer
+
+# 3) §8 视差不能被改弱
+for a in portrait portrait2 portrait3; do python3 tools/acceptance.py parallax --asset $a; done
+
+# 4) 界面三条路径（删素材 / 采集页 / 观看页）各看一次
+cp -r assets/portrait2 assets/_tmp && ./ui/build/memorial_studio --autodelete _tmp
+./ui/build/memorial_studio --capture
+./ui/build/memorial_studio --asset portrait3
+```
+
+判据：中部平均差 < 1 灰阶、p99 ≤ 24（同一版本连跑两次本来就有 p99=1 的动画相位抖动）。
+**2026-11-24 这一轮的结果**：
+
+| 检查 | 结果 |
+|---|---|
+| portrait / portrait2 / portrait3 × 8 种参数 | 24/24 通过，中部 mean 0.35–0.57、p99 ≤ 5，差异只落在轮廓边缘那 1 个像素上 |
+| §8-1 视差（1.0 m 处） | portrait 22.3 / portrait2 44.7 / portrait3 16.6 px，全部 ≥ 8 |
+| 删除键（`--autodelete`） | OK，目录真的删掉、列表刷新 |
+| 采集页 | 相机预览正常，无"相机不可用" |
+| 首页 / 观看页（最大化） | 正常，无黑边、无接缝 |
+
 ### 已知短板 / 下一步
 
 1. **延迟 138 ms**：模型推理 54 ms 是硬瓶颈，相机帧龄 64 ms 已接近 Python 端
