@@ -29,7 +29,7 @@ attribute vec2 aUV;
 
 uniform sampler2D uDepthTex;
 uniform float uGain, uZFoc, uEyeX, uEyeY, uHalfW, uHalfH, uFitX, uFitY;
-uniform float uTime, uMaxShift;
+uniform float uTime, uMaxShift, uPx;
 uniform sampler2D uHeadMask;
 uniform float uGaze, uGazeGain;
 
@@ -51,15 +51,17 @@ void main() {
     //     加权意味着脸内部不同位置走不同距离，幅度一大就是剪切，脸越转越歪。
     //     真正的转头要靠神经重演（LivePortrait），2.5D 网格做不到。
     //  2) 点头：极缓慢的上下浮动，幅度 1.8px、周期约 8.6 s，纯粹为了"别太死板"。
+    // 注意：网格坐标是"资产像素"，所以凡是绝对值（px）的动效都要乘 uPx
+    // 归一到 1272 px 的参照资产上，否则小图会被放大成夸张的晃动。
     float hm = texture2D(uHeadMask, aUV).r;
     if (uGaze > 0.001) {
-        pos += vec2(uEyeX, uEyeY) * uGaze * uGazeGain * hm;
+        pos += vec2(uEyeX, uEyeY) * uGaze * uGazeGain * uPx * hm;
     }
-    pos.y += 1.8 * sin(uTime * 0.73 + 1.7) * hm;
+    pos.y += 1.8 * uPx * sin(uTime * 0.73 + 1.7) * hm;
 
     // 呼吸：以画面中心为基准的极轻微纵向缩放 + 横向漂移
     pos.y *= 1.0 + 0.0026 * sin(uTime * 1.6);
-    pos.x += 0.8 * sin(uTime * 0.7);
+    pos.x += 0.8 * uPx * sin(uTime * 0.7);
 
     vUV = aUV;
     gl_Position = vec4((pos.x / uHalfW) * uFitX,
@@ -620,7 +622,7 @@ void DibrWidget::resizeGL(int w, int h)
 void DibrWidget::drawPass(float gainScale, int pass)
 {
     m_prog.setUniformValue("uPass", pass);
-    m_prog.setUniformValue("uGain", m_gain * gainScale);
+    m_prog.setUniformValue("uGain", m_gain * gainScale * m_resScale);
     m_vao.bind();
     glDrawElements(GL_TRIANGLES, m_indexCount, GL_UNSIGNED_INT, nullptr);
     m_vao.release();
@@ -701,7 +703,12 @@ void DibrWidget::paintGL()
     m_prog.setUniformValue("uFitX", m_fitX);
     m_prog.setUniformValue("uFitY", m_fitY);
     m_prog.setUniformValue("uTime", m_time);
-    m_prog.setUniformValue("uMaxShift", 70.0f);
+    // 视差增益按资产宽度归一。gain=75 是在 1272 px 宽的现场采集资产上标定的
+    // （±1 视点在 1.0 m 处约 32 px ≈ 2.5% 画面宽）。换成 180 px 的照片时若照搬
+    // 绝对像素，同样的位移会占满画面、边缘露出大片空洞。
+    m_resScale = float(m_w) / 1272.0f;
+    m_prog.setUniformValue("uPx", m_resScale);
+    m_prog.setUniformValue("uMaxShift", 70.0f * m_resScale);
     m_prog.setUniformValue("uSplit", m_split);
 
     // 背景层：增益 0（不位移），保证铺满整屏不露黑边

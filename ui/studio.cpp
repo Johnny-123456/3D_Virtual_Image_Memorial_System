@@ -20,6 +20,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
+#include <QMessageBox>
 #include <QProcess>
 #include <QPushButton>
 #include <QScrollArea>
@@ -43,6 +44,14 @@
 static QString g_root;          // 仓库根目录
 static QString g_preview = "/tmp/memorial_preview.jpg";
 
+/// 删除一个资产目录。抽出来是为了让界面按钮和 --autodelete 自测走同一条路径。
+static bool removeAssetDir(const QString &dir)
+{
+    QDir d(dir);
+    if (!d.exists()) return true;
+    return d.removeRecursively();
+}
+
 static const char *kQss = R"(
 QWidget { background:#0e1013; color:#e6e2dc;
           font-family:'Noto Sans CJK SC','Sans'; font-size:16px; }
@@ -58,6 +67,11 @@ QToolButton#newcard {
     color:#8d8880; font-size:17px;
 }
 QToolButton#newcard:hover { border-color:#d8b48a; color:#d8b48a; }
+QToolButton#del {
+    background:rgba(14,16,19,190); border:1px solid #3a4049; border-radius:15px;
+    color:#c9c3ba; font-size:15px;
+}
+QToolButton#del:hover { background:#5a2d2d; border-color:#c96a6a; color:#ffd9d9; }
 QPushButton {
     background:#1d2128; border:1px solid #2c323b; border-radius:10px;
     padding:12px 26px; color:#e6e2dc; font-size:17px;
@@ -72,6 +86,8 @@ QTextEdit { background:#0a0c0f; border:1px solid #22262c; border-radius:8px;
             color:#9aa0a6; font-family:monospace; font-size:13px; }
 QLineEdit { background:#14171c; border:1px solid #2c323b; border-radius:8px;
             padding:8px 12px; }
+QMessageBox { background:#14171c; }
+QMessageBox QLabel { color:#e2ddd5; font-size:16px; }
 QScrollArea { border:none; }
 QScrollBar:vertical { background:#0e1013; width:10px; }
 QScrollBar::handle:vertical { background:#2c323b; border-radius:5px; }
@@ -123,7 +139,7 @@ public:
             const QString meta = fi.absoluteFilePath() + "/meta.json";
             if (!QFileInfo::exists(meta) || !QFileInfo::exists(fi.absoluteFilePath() + "/rgb.png"))
                 continue;
-            m_grid->addWidget(makeCard(fi.fileName(), fi.absoluteFilePath()), row, col);
+            m_grid->addWidget(makeCell(fi.fileName(), fi.absoluteFilePath()), row, col);
             if (++col >= 3) { col = 0; ++row; }
         }
         m_grid->addWidget(makeNewCard(), row, col);
@@ -137,13 +153,16 @@ signals:
     void newCapture();
 
 private:
-    QToolButton *makeCard(const QString &name, const QString &dir)
+    QWidget *makeCell(const QString &name, const QString &dir)
     {
-        auto *b = new QToolButton;
+        auto *cell = new QWidget;
+        cell->setFixedSize(344, 240);
+
+        auto *b = new QToolButton(cell);
         b->setObjectName("card");
         b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         b->setIconSize(QSize(320, 180));
-        b->setFixedSize(344, 240);
+        b->setGeometry(0, 0, 344, 240);
         b->setText(name);
         QPixmap pm(dir + "/rgb.png");
         if (!pm.isNull())
@@ -153,7 +172,38 @@ private:
         connect(b, &QToolButton::clicked, this, [this, dir, name] {
             emit openAsset(dir, name);
         });
-        return b;
+
+        // 右上角删除键：先确认，再把整个目录删掉（不可恢复）
+        auto *del = new QToolButton(cell);
+        del->setObjectName("del");
+        del->setText(QString::fromUtf8("✕"));
+        del->setFixedSize(30, 30);
+        del->setGeometry(344 - 37, 7, 30, 30);
+        del->setToolTip(QString::fromUtf8("删除这个影像"));
+        del->setProperty("assetName", name);
+        del->raise();
+        connect(del, &QToolButton::clicked, this, [this, dir, name] {
+            QMessageBox box(QMessageBox::Warning, QString::fromUtf8("删除影像"),
+                            QString::fromUtf8("确定要删除「%1」吗？\n\n").arg(name)
+                                + QString::fromUtf8("图像、深度、标定数据会一起删除，")
+                                + QString::fromUtf8("无法恢复，需要重新采集。"),
+                            QMessageBox::NoButton, this);
+            QPushButton *yes = box.addButton(QString::fromUtf8("删除"),
+                                             QMessageBox::DestructiveRole);
+            QPushButton *cancel = box.addButton(QString::fromUtf8("取消"),
+                                                QMessageBox::RejectRole);
+            box.setDefaultButton(cancel);      // 手滑回车不会删掉东西
+            box.exec();
+            if (box.clickedButton() != yes) return;
+            if (!removeAssetDir(dir)) {
+                QMessageBox::warning(this, QString::fromUtf8("删除失败"),
+                                     QString::fromUtf8("无法删除\n%1\n请检查目录权限。").arg(dir));
+                return;
+            }
+            qInfo("asset deleted: %s", qPrintable(dir));
+            refresh();
+        });
+        return cell;
     }
 
     QToolButton *makeNewCard()
@@ -717,6 +767,58 @@ int main(int argc, char **argv)
         const int ni = args.indexOf("--auto-start");
         if (ni >= 0 && ni + 1 < args.size()) w.autoStartCapture(args[ni + 1]);
         else w.goCapture();
+    }
+
+    // --autodelete <名称> [--autodelete-delay ms]：点一次删除键并自动确认，
+    // 结束后按目录是否真的消失给出退出码（0 成功 / 5 失败），用于自动化验证。
+    const int di = args.indexOf("--autodelete");
+    if (di >= 0 && di + 1 < args.size()) {
+        const QString name = args[di + 1];
+        int delay = 300;
+        const int dli = args.indexOf("--autodelete-delay");
+        if (dli >= 0 && dli + 1 < args.size()) delay = args[dli + 1].toInt();
+        if (delay <= 0) delay = 300;
+
+        QTimer::singleShot(800, &w, [&w, name, delay] {
+            QToolButton *target = nullptr;
+            for (QToolButton *b : w.findChildren<QToolButton *>("del"))
+                if (b->property("assetName").toString() == name) target = b;
+            if (!target) {
+                qWarning("AUTODELETE %s : FAIL(no delete button)", qPrintable(name));
+                QCoreApplication::exit(6);
+                return;
+            }
+            // 模态框弹出后会阻塞在嵌套事件循环里，所以先用定时器挂好"自动点 Yes"
+            QElapsedTimer t0;
+            t0.start();
+            auto *ans = new QTimer(qApp);
+            ans->setInterval(50);
+            QObject::connect(ans, &QTimer::timeout, [ans, delay, t0] {
+                auto *mb = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                if (!mb) return;
+                if (t0.elapsed() < delay) return;
+                fprintf(stderr, "[autodelete] modal found, clicking Yes\n");
+                fflush(stderr);
+                ans->stop();
+                QAbstractButton *yes = nullptr;
+                for (auto *b : mb->buttons())
+                    if (mb->buttonRole(b) == QMessageBox::DestructiveRole) yes = b;
+                if (yes) yes->click();
+                else mb->done(QMessageBox::Yes);
+            });
+            ans->start();
+            fprintf(stderr, "[autodelete] clicking delete button for %s\n", qPrintable(name));
+            fflush(stderr);
+            target->click();
+            ans->stop();
+            fprintf(stderr, "[autodelete] dialog closed, dir exists=%d\n",
+                    int(QDir(g_root + "/assets/" + name).exists()));
+            fflush(stderr);
+            const bool gone = !QDir(g_root + "/assets/" + name).exists();
+            qInfo("AUTODELETE %s : %s", qPrintable(name),
+                  gone ? "OK(dir removed)" : "FAIL(dir still exists)");
+            QCoreApplication::exit(gone ? 0 : 5);
+        });
     }
 
     // --autoswitch a,b：自动走一遍"看 a → 返回 → 看 b"，用于复现切换素材

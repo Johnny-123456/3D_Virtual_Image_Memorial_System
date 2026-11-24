@@ -240,8 +240,10 @@ int main(int argc, char **argv)
     QCommandLineOption optGaze("gaze", "快照时固定回望强度 0..1", "v");
     QCommandLineOption optSecond("second", "先加载 --asset，再切换到该资产后快照"
                                           "（复现观看页切换素材）", "dir");
+    QCommandLineOption optSnapScale("snap-scale",
+                                    "快照窗口相对资产尺寸的倍数（默认 0.5）", "k", "0.5");
     p.addOptions({optAsset, optSnap, optEye, optFull, optFocus, optGain,
-                  optPort, optStyle, optBlink, optGaze, optSecond});
+                  optPort, optStyle, optBlink, optGaze, optSecond, optSnapScale});
     p.process(app);
 
     Viewer v(p.value(optAsset), quint16(p.value(optPort).toUShort()));
@@ -273,7 +275,11 @@ int main(int argc, char **argv)
         if (p.isSet(optFocus)) v.gl()->setFocusDepth(p.value(optFocus).toFloat());
         if (p.isSet(optGain)) v.gl()->setGain(p.value(optGain).toFloat());
         v.gl()->setEye(ex, ey);
-        v.resize(v.gl()->assetWidth() / 2, v.gl()->assetHeight() / 2);
+        // 低分辨率资产（比如 180 px 的照片）按 /2 出来的快照太小，量不出来，
+        // 所以倍数可调；渲染是矢量的，放大不改变视差的相对幅度。
+        float sc = p.value(optSnapScale).toFloat();
+        if (sc <= 0.1f) sc = 0.5f;
+        v.resize(int(v.gl()->assetWidth() * sc), int(v.gl()->assetHeight() * sc));
         v.show();
         QTimer::singleShot(900, &app, [&] {
             QImage img = v.gl()->snapshotFrame();
