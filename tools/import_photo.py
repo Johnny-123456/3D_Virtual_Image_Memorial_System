@@ -157,6 +157,52 @@ def drawover(rgb: np.ndarray, pair) -> np.ndarray:
 
 # ------------------------------------------------------------------ 主流程
 
+def harden_matte(a: np.ndarray, q: float = 0.35):
+    """把主体内部的半透明拉满，只保留边缘的软过渡。
+
+    为什么需要：U²-Netp 对小动物的身体（尤其是贴边、被裁掉的胸口）只给
+    0.4~0.6 的 alpha，渲染出来身体是半透明的，背景从狗肚子里透出来 —— 看起来
+    就是"素材没匹配好"。人像的 MODNet 不会这样，所以这个修补只放在照片导入里。
+
+    做法：低阈值取主体 → 保留面积相当的连通域 → 填洞 → 用它的模糊版当"实心区"，
+    与原 alpha 取 max。内部变实、边缘仍是 2~3 px 的软过渡。
+    """
+    h, w = a.shape[:2]
+    m = (a > q).astype(np.uint8)
+    n, lab, st, cen = cv2.connectedComponentsWithStats(m, 8)
+    if n <= 1:
+        return a
+    areas = st[1:, cv2.CC_STAT_AREA]
+    big = float(areas.max())
+    keep = np.zeros((h, w), np.uint8)
+    for i in range(1, n):
+        if st[i, cv2.CC_STAT_AREA] >= 0.04 * big:      # 同一主体可能被拆成几块
+            keep |= (lab == i).astype(np.uint8)
+    # 填洞：从边界 flood 反向填
+    inv = (1 - keep).astype(np.uint8)
+    ff = inv.copy()
+    mk = np.zeros((h + 2, w + 2), np.uint8)
+    cv2.floodFill(ff, mk, (0, 0), 0)
+    keep = keep | ff
+    solid = cv2.GaussianBlur(keep.astype(np.float32), (0, 0), 1.2)
+    return np.clip(np.maximum(a, solid), 0.0, 1.0).astype(np.float32)
+
+
+def matte_is_soft(a: np.ndarray, q: float = 0.35) -> float:
+    """主体内部"半透明"像素的比例：>0.06 就值得加固。"""
+    m = (a > q).astype(np.uint8)
+    n, lab, st, cen = cv2.connectedComponentsWithStats(m, 8)
+    if n <= 1:
+        return 0.0
+    i = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
+    inner = cv2.erode((lab == i).astype(np.uint8),
+                      cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))) > 0
+    if inner.sum() < 50:
+        return 0.0
+    v = a[inner]
+    return float(((v > 0.2) & (v < 0.75)).mean())
+
+
 def read_photo(path: str) -> np.ndarray:
     import base64
     data = np.fromfile(path, dtype=np.uint8)     # 支持中文路径
@@ -176,6 +222,8 @@ def main() -> int:
     ap.add_argument("--subject-dist", type=float, default=1.2,
                     help="把主体归一到这个距离（米），决定视差强度")
     ap.add_argument("--matte-model", default=None)
+    ap.add_argument("--matte-harden", default="auto", choices=["auto", "on", "off"],
+                    help="把主体内部的半透明补实（U²-Netp 对动物身体常只给 0.5 的 alpha）")
     ap.add_argument("--eyes", default=None,
                     help='手动指定两眼中心 "x1,y1,x2,y2"（像素）')
     ap.add_argument("--no-eyes", action="store_true", help="不做眼睛检测")
@@ -236,6 +284,12 @@ def main() -> int:
         matte = mm.infer(rgb)
     cov = float((matte > 0.5).mean()) * 100
     print("  matte 覆盖 %.1f%%" % cov)
+    soft = matte_is_soft(matte)
+    if a.matte_harden == "on" or (a.matte_harden == "auto" and soft > 0.06):
+        before = soft * 100
+        matte = harden_matte(matte)
+        print("  抠图加固：内部半透明像素 %.0f%% → %.0f%%（身体不再透明）"
+              % (before, matte_is_soft(matte) * 100))
     if cov < 3 or cov > 92:
         print("✗ 抠图覆盖 %.1f%% 不合理：主体太小或几乎占满画面，检查照片" % cov)
         return 2
