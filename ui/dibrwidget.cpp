@@ -35,9 +35,16 @@ uniform float uGaze, uGazeGain;
 
 varying vec2 vUV;
 
-uniform float uCoverX, uCoverY, uFitCover;
+uniform int uPassV;
 
 void main() {
+    // pass 3 是四周补边的底衬：铺满整个视口，不参与视差位移
+    if (uPassV == 3) {
+        vUV = aUV;                       // 这里是"屏幕 uv"，不是资产 uv
+        gl_Position = vec4(aUV * 2.0 - 1.0, 0.0, 1.0);
+        return;
+    }
+
     float z = texture2D(uDepthTex, aUV).r;
     z = max(z, 0.15);
 
@@ -66,12 +73,11 @@ void main() {
     pos.x += 0.8 * uPx * sin(uTime * 0.7);
 
     vUV = aUV;
-    // 背景层走 cover（铺满视口、允许裁掉上下/左右），主体层走 contain。
-    // 只 contain 的话，窗口比例和资产比例不一致时两侧是纯黑边，看着像
-    // "影像被挤窄了"；背景铺满后接缝也没有了。
-    vec2 fit = (uFitCover > 0.5) ? vec2(uCoverX, uCoverY) : vec2(uFitX, uFitY);
-    gl_Position = vec4((pos.x / uHalfW) * fit.x,
-                       (pos.y / uHalfH) * fit.y, 0.0, 1.0);
+    // 背景层和主体层必须用同一个装配方式，否则背景和主体的缩放不一致，
+    // 主体边缘会露出"贴上去"的台阶（踩过：背景 cover、主体 contain）。
+    // 这里统一 contain（完整可见、不裁脸），多出来的两侧由 pass 3 补边。
+    gl_Position = vec4((pos.x / uHalfW) * uFitX,
+                       (pos.y / uHalfH) * uFitY, 0.0, 1.0);
 }
 )";
 
@@ -93,6 +99,7 @@ uniform int uPass;
 uniform sampler2D uEyeMask;      // 两眼位置的小椭圆，做"眼神微动"
 uniform float uHasEye;
 uniform vec2 uEyeShift;          // UV 偏移（由 CPU 按像素换算好）
+uniform float uFitX, uFitY;      // contain 装配系数，pass 3 用它反算扩展坐标
 
 varying vec2 vUV;
 
@@ -109,7 +116,18 @@ void main() {
     vec2 d = vUV - 0.5;
     float vig = 1.0 - dot(d, d) * (0.45 + 0.25 * uGrade);
 
-    if (uPass == 0) {
+    if (uPass == 3) {
+        // 补边：把背景沿边缘镜像出去铺满两侧，并沿用同一套暗角。
+        // 用镜像而不是拉伸，是因为画面外侧还有真实内容（不是一团色块）；
+        // 暗角按"扩展坐标"算，接缝处亮度连续，看不出边界。
+        vec2 e = (vUV - 0.5) / vec2(uFitX, uFitY) + 0.5;   // 扩展后的资产坐标
+        vec2 m = 1.0 - abs(1.0 - abs(e));                  // 镜像回 [0,1]
+        vec3 bg = texture2D(uTexBlur, m).rgb;
+        vec2 dd = e - 0.5;
+        float v3 = 1.0 - dot(dd, dd) * (0.45 + 0.25 * uGrade);
+        gl_FragColor = vec4(grade(bg) * clamp(v3, 0.0, 1.0) * 0.9, 1.0);
+
+    } else if (uPass == 0) {
         vec3 bg = texture2D(uTexBlur, vUV).rgb;
         bg = grade(bg) * vig * 0.9;
         gl_FragColor = vec4(bg, 1.0);
@@ -624,16 +642,12 @@ void DibrWidget::resizeGL(int w, int h)
     if (wa > aa) { m_fitX = aa / wa; m_fitY = 1.0f; }
     else { m_fitX = 1.0f; m_fitY = wa / aa; }
 
-    // cover：等比放大到"两个方向都不小于视口"。ma>1 时多出来的部分被裁掉，
-    // 背景层用它铺满，所以任何窗口比例下都不会露出黑边。
-    const float cz = (wa > aa) ? (wa / aa) : (aa / wa);
-    m_coverX = m_coverY = cz;
 }
 
 void DibrWidget::drawPass(float gainScale, int pass)
 {
     m_prog.setUniformValue("uPass", pass);
-    m_prog.setUniformValue("uFitCover", pass == 0 ? 1.0f : 0.0f);
+    m_prog.setUniformValue("uPassV", pass);
     m_prog.setUniformValue("uGain", m_gain * gainScale * m_resScale);
     m_vao.bind();
     glDrawElements(GL_TRIANGLES, m_indexCount, GL_UNSIGNED_INT, nullptr);
@@ -714,9 +728,7 @@ void DibrWidget::paintGL()
     m_prog.setUniformValue("uHalfH", float(m_h) * 0.5f);
     m_prog.setUniformValue("uFitX", m_fitX);
     m_prog.setUniformValue("uFitY", m_fitY);
-    m_prog.setUniformValue("uCoverX", m_coverX);
-    m_prog.setUniformValue("uCoverY", m_coverY);
-    m_prog.setUniformValue("uFitCover", 0.0f);
+
     m_prog.setUniformValue("uTime", m_time);
     // 视差增益按资产宽度归一。gain=75 是在 1272 px 宽的现场采集资产上标定的
     // （±1 视点在 1.0 m 处约 32 px ≈ 2.5% 画面宽）。换成 180 px 的照片时若照搬
@@ -725,6 +737,9 @@ void DibrWidget::paintGL()
     m_prog.setUniformValue("uPx", m_resScale);
     m_prog.setUniformValue("uMaxShift", 70.0f * m_resScale);
     m_prog.setUniformValue("uSplit", m_split);
+
+    // 补边底衬：铺满视口（窗口比资产"更宽/更高"时才会露出来）
+    drawPass(0.0f, 3);
 
     // 背景层：增益 0（不位移），保证铺满整屏不露黑边
     drawPass(0.25f, 0);   // 背景也走一点视差：原来是 0，画面"太死板"

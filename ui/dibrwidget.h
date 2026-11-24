@@ -91,7 +91,6 @@ private:
     int m_style = 0;             // 0清晰 1回忆 2魂影
     float m_fps = 0.0f;
     float m_fitX = 1.0f, m_fitY = 1.0f;
-    float m_coverX = 1.0f, m_coverY = 1.0f;
 
     QOpenGLShaderProgram m_prog;
     QOpenGLBuffer m_vbo{QOpenGLBuffer::VertexBuffer};
